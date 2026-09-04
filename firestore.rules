@@ -8,15 +8,22 @@ rules_version = '2';
  *    Firebase Console -> Build -> Firestore Database -> Rules -> Publish
  *
  *  WHAT THESE RULES DO
- *    - Participants may CREATE their own session and its data chunks.
- *    - Nobody using the website can READ, EDIT, or DELETE anything, ever, *      including their own data, and including you.
+ *    - Participants may CREATE their own session metadata, raw-data chunks,
+ *      and per-trial summary documents.
+ *    - Nobody using the website can READ, EDIT, or DELETE anything, including
+ *      their own data.
  *    - You read the data with analysis/fetch_data.py, which authenticates as
- *      you (a project owner) and bypasses these rules entirely.
+ *      you (a project owner) and bypasses these client rules.
  *
- *  WHY NOT "TEST MODE"?
- *  Firebase offers a test mode that allows anyone on the internet to read and
- *  write everything, and then stops working after 30 days. Studies have been
- *  lost to both halves of that sentence. These rules do not expire.
+ *  DATA LAYOUT
+ *    sessions/{sessionId}
+ *      - compact session metadata / compact trial summaries
+ *
+ *    sessions/{sessionId}/chunks/{chunkId}
+ *      - raw frame-by-frame data, split into chunks
+ *
+ *    sessions/{sessionId}/trialSummaries/{trialId}
+ *      - detailed events and reach records for one trial/block
  * ===========================================================================*/
 
 service cloud.firestore {
@@ -26,8 +33,7 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Data may only be filed under the id of the participant writing it, so a
-    // participant cannot write data attributed to someone else.
+    // Data may only be filed under the uid of the participant writing it.
     function ownedByCaller() {
       return request.resource.data.uid == request.auth.uid;
     }
@@ -38,23 +44,34 @@ service cloud.firestore {
                     && ownedByCaller()
                     && request.resource.data.keys().hasAll(
                          ['uid', 'sessionId', 'experimentId', 'startedAt'])
+                    && request.resource.data.sessionId == sessionId
                     && request.resource.data.experimentId is string
                     && request.resource.data.experimentId.size() <= 64
                     && request.resource.data.participantId is string
                     && request.resource.data.participantId.size() <= 128;
 
-      // Session documents are written once, at the end, and never touched
-      // again. Anything else is a bug or an attack.
+      // Session documents are written once, at the end, and never touched again.
       allow read, update, delete: if false;
 
       match /chunks/{chunkId} {
 
         allow create: if signedIn()
                       && ownedByCaller()
+                      && request.resource.data.sessionId == sessionId
                       && request.resource.data.frames is list
                       // A cheap ceiling on how much one document can hold.
                       // Raise it only if you also raise chunkFrames in config.js.
                       && request.resource.data.frames.size() <= 2000;
+
+        allow read, update, delete: if false;
+      }
+
+      match /trialSummaries/{trialId} {
+
+        allow create: if signedIn()
+                      && ownedByCaller()
+                      && request.resource.data.sessionId == sessionId
+                      && request.resource.data.trialIndex is int;
 
         allow read, update, delete: if false;
       }

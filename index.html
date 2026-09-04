@@ -111,6 +111,25 @@
     <button id="btn-start" class="primary">I'm ready, start</button>
   </section>
 
+  <!-- Comprehension check -------------------------------------------- -->
+<section id="screen-comprehension" class="screen">
+
+  <h2>Check your understanding</h2>
+
+  <p class="subtle">
+    Please answer all four questions correctly before starting the task.
+  </p>
+
+  <div id="comprehension-form"></div>
+
+  <p id="comprehension-feedback" class="status"></p>
+
+  <button id="btn-comprehension" class="primary">
+    Check answers
+  </button>
+
+</section>
+
   <!-- 6 -------------------------------------------------------------- -->
   <section id="screen-trial" class="screen">
     <div class="progress">
@@ -130,6 +149,28 @@
   </section>
 
   <!-- 8 -------------------------------------------------------------- -->
+  
+  <!-- Post-experiment feedback ---------------------------------------- -->
+  <section id="screen-feedback" class="screen">
+    <div class="feedback-header">
+      <h2>Experiment Feedback</h2>
+      <p class="feedback-intro">
+        Please tell us about your experience. The rating questions are required;
+        the two written questions are optional.
+      </p>
+      <div class="feedback-scale-legend">
+        <strong>1 = Strongly disagree</strong> &nbsp; | &nbsp;
+        2 = Disagree &nbsp; | &nbsp;
+        3 = Neither agree nor disagree &nbsp; | &nbsp;
+        4 = Agree &nbsp; | &nbsp;
+        <strong>5 = Strongly agree</strong>
+      </div>
+    </div>
+
+    <div id="feedback-form"></div>
+    <p id="feedback-error" aria-live="polite"></p>
+    <button id="btn-feedback-submit" class="primary">Submit feedback</button>
+  </section>
   <section id="screen-saving" class="screen">
     <div class="spinner"></div>
     <p id="saving-text">Saving…</p>
@@ -168,7 +209,7 @@
 </main>
 
 <script type="module">
-  import { main } from "./js/core/experiment.js";
+  import { main } from "./js/core/experiment.js?v=6";
   main();
 </script>
 </body>

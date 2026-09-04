@@ -35,14 +35,98 @@ export class Recorder {
    * @param {object} derived  any extra numbers your experiment computed, e.g.
    *                          { aperture: 0.41 }. Kept alongside the raw data.
    */
-  addFrame(tMs, lm, wl, derived = {}) {
-    this.frames.push({
-      t: round(tMs, 1),
-      lm: lm ? flatten(lm, this.decimals) : null,
-      wl: wl ? flatten(wl, this.decimals) : null,
-      d: roundValues(derived, 5),
-    });
-  }
+  addFrame(
+  tMs,
+  lm,
+  wl,
+  derived = {},
+  multi = {}
+) {
+
+  /*
+   * Backward compatibility:
+   *
+   * lm / wl  = first detected hand, exactly as before.
+   *
+   * For bimanual experiments we additionally save:
+   *
+   * lm2 / wl2 = second detected hand
+   * h          = MediaPipe handedness labels in detection order
+   *
+   * Example:
+   * h = ["Left", "Right"]
+   *
+   * We intentionally preserve detection order rather than
+   * immediately rewriting the data into anatomical Left/Right.
+   * That lets us detect possible handedness swaps offline.
+   */
+
+  const allLandmarks =
+    multi.allLandmarks ?? [];
+
+  const allWorldLandmarks =
+    multi.allWorldLandmarks ?? [];
+
+  const allHandedness =
+    multi.allHandedness ?? [];
+
+
+  const lm2 =
+    allLandmarks[1] ?? null;
+
+  const wl2 =
+    allWorldLandmarks[1] ?? null;
+
+
+  this.frames.push({
+
+    t:
+      round(tMs, 1),
+
+    /*
+     * First detected hand.
+     */
+    lm:
+      lm
+        ? flatten(lm, this.decimals)
+        : null,
+
+    wl:
+      wl
+        ? flatten(wl, this.decimals)
+        : null,
+
+    /*
+     * Second detected hand.
+     */
+    lm2:
+      lm2
+        ? flatten(lm2, this.decimals)
+        : null,
+
+    wl2:
+      wl2
+        ? flatten(wl2, this.decimals)
+        : null,
+
+    /*
+     * Handedness labels corresponding to lm / lm2.
+     */
+    h:
+      allHandedness.slice(0, 2),
+
+    /*
+     * Experiment-specific derived measurements.
+     */
+    d:
+      roundValues(
+        derived,
+        5
+      ),
+
+  });
+
+}
 
   /**
    * Note that something happened at a point in time, a tap, a button press,

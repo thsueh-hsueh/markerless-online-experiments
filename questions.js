@@ -1,5 +1,5 @@
 /* =============================================================================
- *  questions.js: the demographic questions asked before the task starts.
+ *  questions.js: participant background and current-state questions asked before the task starts.
  * =============================================================================
  *
  *  THIS FILE IS MEANT TO BE EDITED. Add, remove, or reorder the entries in
@@ -49,10 +49,7 @@
  *  question if you do not want to ask for it.
  *
  *  To skip demographics entirely, set DEMOGRAPHIC_QUESTIONS to an empty list:
- *      export const DEMOGRAPHIC_QUESTIONS = [];
- * ===========================================================================*/
-
-export const DEMOGRAPHIC_QUESTIONS = [
+ *      export const DEMOGRAPHIC_QUESTIONS = [
 
   { id: "age",
     label: "Age",
@@ -69,10 +66,10 @@ export const DEMOGRAPHIC_QUESTIONS = [
     options: ["Female", "Male", "Intersex", "Prefer not to say"] },
 
   { id: "dominantHand",
-    label: "Dominant hand",
+    label: "Which hand do you primarily use for everyday activities such as writing?",
     type: "select",
     required: true,
-    options: ["Right", "Left", "Ambidextrous", "Prefer not to say"] },
+    options: ["Right", "Left", "Mixed / no clear preference", "Prefer not to say"] },
 
   { id: "device",
     label: "What device are you using?",
@@ -96,41 +93,54 @@ export const DEMOGRAPHIC_QUESTIONS = [
     type: "select",
     options: ["None", "Glasses", "Contact lenses", "Prefer not to say"] },
 
-  { id: "exercisePerWeek",
-    label: "Physical exercise per week",
-    type: "select",
-    options: ["None",
-              "Less than 1 hour",
-              "1 to 3 hours",
-              "3 to 5 hours",
-              "More than 5 hours",
-              "Prefer not to say"] },
-
-  { id: "smokingStatus",
-    label: "Smoking status",
-    type: "select",
-    options: ["Never smoked", "Former smoker", "Current smoker", "Prefer not to say"] },
-
-  { id: "ethnicity",
-    label: "Ethnicity",
-    type: "select",
-    options: ["Hispanic or Latino", "Not Hispanic or Latino", "Prefer not to say"] },
-
-  { id: "race",
-    label: "Race",
-    type: "select",
+  { id: "raceEthnicity",
+    label: "What is your race and/or ethnicity?",
+    type: "checkboxes",
+    help: "Select all that apply.",
     options: ["American Indian or Alaska Native",
               "Asian",
               "Black or African American",
-              "Native Hawaiian or Other Pacific Islander",
+              "Hispanic or Latino",
+              "Middle Eastern or North African",
+              "Native Hawaiian or Pacific Islander",
               "White",
-              "More than one race",
+              "Another race or ethnicity",
               "Prefer not to say"] },
 
+  { id: "gamingFrequency",
+    label: "How often do you play video or computer games?",
+    type: "select",
+    options: ["Never",
+              "Less than once a week",
+              "1-2 days per week",
+              "3-5 days per week",
+              "Almost every day",
+              "Prefer not to say"] },
+
+  { id: "sleepHoursLastNight",
+    label: "How many hours did you sleep last night?",
+    type: "number",
+    min: 0,
+    max: 24,
+    placeholder: "e.g. 7.5" },
+
+  { id: "currentSleepiness",
+    label: "How sleepy do you feel right now?",
+    type: "select",
+    options: ["1 - Extremely alert",
+              "2",
+              "3 - Alert",
+              "4",
+              "5 - Neither alert nor sleepy",
+              "6",
+              "7 - Sleepy, but no difficulty staying awake",
+              "8",
+              "9 - Very sleepy, fighting sleep"] },
+
   { id: "participantId",
-    label: "Name or Prolific ID",
+    label: "Participant ID or Prolific ID",
     type: "text",
-    help: "Used only to link your responses. Leave blank for an anonymous ID.",
+    help: "If you are participating through Prolific, enter your Prolific ID. Otherwise, leave this blank to receive an anonymous ID.",
     placeholder: "e.g. 5f3c..." },
 
 ];

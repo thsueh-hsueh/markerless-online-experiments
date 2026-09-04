@@ -127,6 +127,29 @@ export async function uploadTrialChunks(sessionId, trialIndex, chunks, meta, onP
 }
 
 /**
+ * Write one trial/block summary into its own document.
+ * Detailed events/reach records live here instead of being packed into the
+ * parent session document, which keeps the parent safely below Firestore's
+ * 1 MiB per-document limit even for long experiments.
+ *
+ * Path: sessions/{sessionId}/trialSummaries/{trialIndex}
+ */
+export async function saveTrialSummary(sessionId, trialIndex, payload) {
+  if (!enabled) return;
+  const { doc, setDoc, serverTimestamp } = await import(`${SDK}/firebase-firestore.js`);
+  await setDoc(
+    doc(db, "sessions", sessionId, "trialSummaries", pad(trialIndex)),
+    {
+      ...payload,
+      uid,
+      sessionId,
+      trialIndex,
+      savedAt: serverTimestamp(),
+    }
+  );
+}
+
+/**
  * Write the small summary document. Call this once, at the very end.
  * @param {string} sessionId
  * @param {object} payload  everything except uid/timestamps, which we add here
