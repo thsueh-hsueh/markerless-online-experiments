@@ -49,8 +49,10 @@
  *  question if you do not want to ask for it.
  *
  *  To skip demographics entirely, set DEMOGRAPHIC_QUESTIONS to an empty list:
- *      export const DEMOGRAPHIC_QUESTIONS = [
+ *      export const DEMOGRAPHIC_QUESTIONS = [];
+ */
 
+export const DEMOGRAPHIC_QUESTIONS = [
   { id: "age",
     label: "Age",
     type: "number",
