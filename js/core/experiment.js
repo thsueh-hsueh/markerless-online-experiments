@@ -1,8 +1,8 @@
-﻿/* experiment.js: the runner.
+/* experiment.js: V5.15 JT-flow runner.
  *
  * You should not need to change this file to build a new experiment. It takes
  * an experiment definition (see experiments/_template.js) and walks the
- * participant through: consent -> camera -> instructions -> trials -> upload.
+ * participant through: consent -> essentials -> camera -> instructions -> trials -> save -> final questions -> Treasure Hunt result.
  *
  * THE FRAME LOOP, in one paragraph:
  * Every time the browser paints (~60x per second), we check whether the webcam
@@ -13,13 +13,12 @@
  * disappearing. */
 
 import { STUDY, CONSENT, RECORDING, ACTIVE_EXPERIMENT } from "../../config.js";
-import { DEMOGRAPHIC_QUESTIONS } from "../../questions.js";
+import { DEMOGRAPHIC_QUESTIONS, POST_TASK_QUESTIONS, POST_TASK_LIKERT_SCALE } from "../../questions.js";
 import { renderForm, readForm, focusField } from "./form.js";
 import { startCamera, stopCamera } from "./camera.js";
 import { createTracker } from "./tracker.js";
 import { Recorder } from "./recorder.js?v=3";
-import { FEEDBACK_QUESTIONS, FEEDBACK_SCALE, FEEDBACK_QUESTIONNAIRE_VERSION } from "../../feedback-questions.js?v=1";
-import * as fb from "./firebase.js?v=3";
+import * as fb from "./firebase.js?v=515";
 import { getParticipant, getEnvironment, requestedExperiment } from "./participant.js";
 import * as ui from "./ui.js";
 
@@ -28,7 +27,7 @@ export async function main() {
 
   let exp;
   try {
-exp = (await import(`../../experiments/${name}.js?v=10`)).default;
+exp = (await import(`../../experiments/${name}.js?v=153`)).default;
   } catch (err) {
     return ui.fatal(
       `Could not load the experiment "${name}".`,
@@ -46,132 +45,81 @@ exp = (await import(`../../experiments/${name}.js?v=10`)).default;
 
 async function run(exp) {
   const participant = getParticipant();
-
   const startedAt = new Date().toISOString();
 
-  // ---------------------------------------------------------
-  // LOCAL DEVELOPMENT MODE
-  // Use ?dev=1 to skip consent + demographics on localhost.
-  // This cannot be activated on a public study URL.
-  // ---------------------------------------------------------
   const params = new URLSearchParams(window.location.search);
+  const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const devMode = isLocalhost && params.get("dev") === "1";
+  const showPostInDev = devMode && params.get("post") === "1";
+  if (devMode) console.warn("LOCAL DEVELOPMENT MODE: consent and pre-task questions are skipped; Firebase upload is disabled.");
 
-  const isLocalhost =
-    window.location.hostname === "localhost" ||
-    window.location.hostname === "127.0.0.1";
-
-  const devMode =
-    isLocalhost &&
-    params.get("dev") === "1";
-
-  if (devMode) {
-    console.warn(
-      "LOCAL DEVELOPMENT MODE: consent and demographics are skipped."
-    );
-  }
-
-  // Flag demo mode up front, before the consent screen: someone should know
-  // that nothing is being recorded *before* they agree to anything.
   if (fb.configLooksUnfilled()) {
     ui.$("#demo-banner").hidden = false;
-    console.warn(
-      "Demo mode: Firebase is not configured, so nothing will be saved. " +
-      "Fill in FIREBASE in config.js to collect data (see docs/SETUP.md)."
-    );
+    console.warn("Demo mode: Firebase is not configured, so nothing will be saved.");
   }
 
-  /* ---- 1. Consent -------------------------------------------------------
-   * The consent document comes first, before anything else happens and before
-   * the camera is touched. Each statement in CONSENT.affirmations has to be
-   * ticked, and which ones were agreed to is stored with the session. */
+  /* ---- 1. Consent: preserve the approved document/affirmations, simplify UI. */
   let consentRecord;
-
-if (devMode) {
-
-  consentRecord = {
-    document: CONSENT.pdf ?? null,
-    agreedTo: [],
-    agreedAt: null,
-    developmentBypass: true,
-  };
-
-} else {
-
-  ui.setText("#study-title", STUDY.title);
-  ui.setText("#study-lab", STUDY.labName);
-  ui.setHtml("#consent-intro", STUDY.consentIntroHtml ?? "");
-  ui.setText("#experiment-title", exp.title);
-
-  if (CONSENT.pdf) {
-    ui.$("#consent-doc").src = CONSENT.pdf;
-    ui.$("#consent-download").href = CONSENT.pdf;
+  if (devMode) {
+    consentRecord = { document: CONSENT.pdf ?? null, agreedTo: [], agreedAt: null, developmentBypass: true };
   } else {
-    ui.$("#consent-doc-wrap").hidden = true;
-  }
-
-  const agreed =
-    await collectConsent(CONSENT.affirmations ?? []);
-
-  consentRecord = {
-    document: CONSENT.pdf ?? null,
-    agreedTo: agreed,
-    agreedAt: new Date().toISOString(),
-    developmentBypass: false,
-  };
-
-}
-
-  /* ---- 2. Demographics ---------------------------------------------------
-   * Built from questions.js. Edit that file to change what is asked. */
-  let demographics = {};
- if (!devMode && DEMOGRAPHIC_QUESTIONS.length) {
-    const formEl = ui.$("#demographics-form");
-    // If they came from Prolific, fill their ID in rather than asking twice.
-    renderForm(formEl, DEMOGRAPHIC_QUESTIONS,
-               participant.participantId ? { participantId: participant.participantId } : {});
-    ui.showScreen("screen-demographics");
-
-    while (true) {
-      await ui.waitForClick("#btn-demographics");
-      const { ok, values, firstError } = readForm(formEl, DEMOGRAPHIC_QUESTIONS);
-      if (ok) { demographics = values; break; }
-      focusField(formEl, firstError);
+    if (exp.participantFlow?.simplifiedConsent) {
+      ui.setText("#study-title", "Please consent to start");
+      ui.setText("#study-lab", "");
+      ui.setHtml("#consent-intro", "");
+      ui.setText("#experiment-title", "");
+      const consentButton = ui.$("#btn-consent");
+      if (consentButton) consentButton.textContent = "Next";
+    } else {
+      ui.setText("#study-title", STUDY.title);
+      ui.setText("#study-lab", STUDY.labName);
+      ui.setHtml("#consent-intro", STUDY.consentIntroHtml ?? "");
+      ui.setText("#experiment-title", exp.title);
     }
+
+    if (CONSENT.pdf) {
+      ui.$("#consent-doc").src = CONSENT.pdf;
+      ui.$("#consent-download").href = CONSENT.pdf;
+    } else {
+      ui.$("#consent-doc-wrap").hidden = true;
+    }
+
+    const agreed = await collectConsent(CONSENT.affirmations ?? []);
+    consentRecord = {
+      document: CONSENT.pdf ?? null,
+      agreedTo: agreed,
+      agreedAt: new Date().toISOString(),
+      developmentBypass: false,
+    };
   }
 
-  // A question with id "participantId" doubles as the participant's ID.
+  /* ---- 2. Six essential pre-task questions only. */
+  let demographics = {};
+  if (!devMode && DEMOGRAPHIC_QUESTIONS.length) {
+    configureQuestionScreen({
+      title: "About You",
+      subtitle: "",
+      buttonText: "Continue",
+    });
+    demographics = await collectQuestionSet(DEMOGRAPHIC_QUESTIONS);
+  }
+
   if (!participant.participantId) {
-    participant.participantId = demographics.participantId
-      || `anon_${Math.random().toString(36).slice(2, 8)}`;
+    participant.participantId = `anon_${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  /* ---- 2. Firebase (optional) ------------------------------------------ */
-  // If config.js has not been filled in, the study still runs, it just does
-  // not save. That keeps the live demo usable by anyone who clicks the link.
+  /* ---- 3. Firebase, camera, tracker. Camera permission happens BEFORE fullscreen. */
   ui.showScreen("screen-loading");
   ui.setText("#loading-text", "Connecting...");
- const { enabled: firebaseEnabled } =
-  await fb.initFirebase();
-
-const saving =
-  firebaseEnabled && !devMode;
-
-if (devMode && firebaseEnabled) {
-  console.warn(
-    "Development mode: Firebase upload disabled."
-  );
-}
+  const { enabled: firebaseEnabled } = await fb.initFirebase();
+  const saving = firebaseEnabled && !devMode;
   const sessionId = fb.newSessionId();
 
-  /* ---- 3. Camera + tracker --------------------------------------------- */
   ui.setText("#loading-text", "Starting your camera...");
   const video = await startCamera(RECORDING.video);
-
-  ui.setText("#loading-text", "Loading the hand tracking model (a few MB, first visit only)...");
+  ui.setText("#loading-text", "Loading the hand tracking model...");
   const tracker = await createTracker(exp.tracker ?? "hand", exp.trackerOptions ?? {});
-  if (tracker.delegate === "CPU") {
-    ui.$("#cpu-banner").hidden = false;
-  }
+  if (tracker.delegate === "CPU") ui.$("#cpu-banner").hidden = false;
 
   const stage = ui.$("#stage");
   const canvas = ui.$("#overlay");
@@ -181,267 +129,50 @@ if (devMode && firebaseEnabled) {
   const ctx = canvas.getContext("2d");
   stage.hidden = false;
 
-  /* ---- 4. Positioning check -------------------------------------------- */
-  // A live preview with the landmarks drawn on top. Participants fix their own
-  // lighting and framing here, which is far more effective than instructions.
+  /* Camera check. The experiment's camera Continue button requests fullscreen. */
   ui.showScreen("screen-position");
   await positioningLoop(video, tracker, ctx, canvas, stage);
 
-  /* ---- 5. Instructions -------------------------------------------------- */
+  /* ---- 4. Instructions. A held fist starts the task; click remains fallback. */
   ui.setHtml("#instructions-text", exp.instructions ?? "");
   ui.showScreen("screen-instructions");
-  await ui.waitForClick("#btn-start");
-
-  /* ---- Optional comprehension check ------------------------------ */
-
-let comprehensionRecord = null;
-
-if (
-  exp.comprehension?.questions?.length
-) {
-
-  const questions =
-    exp.comprehension.questions;
-
-  const correctAnswers =
-    exp.comprehension.answers ?? {};
-
-
-  let attempts = 0;
-
-  const attemptRecords = [];
-
-  let firstAttemptCorrect =
-    null;
-
-
-  while (true) {
-
-    attempts += 1;
-
-
-    const formEl =
-      ui.$("#comprehension-form");
-
-
-    /*
-     * Start each attempt with a fresh form.
-     */
-    renderForm(
-      formEl,
-      questions
-    );
-
-
-    ui.setText(
-      "#comprehension-feedback",
-      ""
-    );
-
-
-    ui.showScreen(
-      "screen-comprehension"
-    );
-
-
-    /*
-     * Require every question to be answered.
-     */
-    let values;
-
-
-    while (true) {
-
-      await ui.waitForClick(
-        "#btn-comprehension"
-      );
-
-
-      const result =
-        readForm(
-          formEl,
-          questions
-        );
-
-
-      if (result.ok) {
-
-        values =
-          result.values;
-
-        break;
-
-      }
-
-
-      focusField(
-        formEl,
-        result.firstError
-      );
-
-    }
-
-
-    /*
-     * Score each question.
-     */
-    const items =
-      questions.map(
-        q => ({
-
-          id:
-            q.id,
-
-          response:
-            values[q.id],
-
-          correctAnswer:
-            correctAnswers[q.id],
-
-          correct:
-            values[q.id] ===
-            correctAnswers[q.id],
-
-        })
-      );
-
-
-    const correctCount =
-      items.filter(
-        item => item.correct
-      ).length;
-
-
-    const passed =
-      correctCount ===
-      questions.length;
-
-
-    if (
-      attempts === 1
-    ) {
-
-      firstAttemptCorrect =
-        correctCount;
-
-    }
-
-
-    attemptRecords.push({
-
-      attempt:
-        attempts,
-
-      correctCount,
-
-      total:
-        questions.length,
-
-      passed,
-
-      items,
-
-    });
-
-
-    /*
-     * Perfect score:
-     * participant may start the experiment.
-     */
-    if (passed) {
-
-      ui.setText(
-        "#comprehension-feedback",
-        "Correct."
-      );
-
-
-      comprehensionRecord = {
-
-        passed:
-          true,
-
-        attempts,
-
-        firstAttemptCorrect,
-
-        totalQuestions:
-          questions.length,
-
-        attemptRecords,
-
-      };
-
-
-      break;
-
-    }
-
-
-    /*
-     * Incorrect:
-     * send participant back to the mapping instructions.
-     */
-    ui.setText(
-      "#comprehension-feedback",
-      `You answered ${correctCount} of ${questions.length} correctly. Please review the control rule and try again.`
-    );
-
-
-    await ui.sleep(1500);
-
-
-    ui.setHtml(
-      "#instructions-text",
-      exp.instructions ?? ""
-    );
-
-
-    ui.showScreen(
-      "screen-instructions"
-    );
-
-
-    await ui.waitForClick(
-      "#btn-start"
-    );
-
+  if (exp.participantFlow?.gestureStart) {
+    await waitForFistOrClick(video, tracker, "#btn-start");
+  } else {
+    await ui.waitForClick("#btn-start");
   }
 
-}
+  const comprehensionRecord = await runComprehensionIfNeeded(exp, video, tracker);
 
-  /* ---- 6. Trials -------------------------------------------------------- */
+  /* ---- 5. Trials. Uploads are serialized in the BACKGROUND during transitions. */
   const trials = typeof exp.trials === "function" ? exp.trials() : exp.trials;
   const recorder = new Recorder();
   const trialSummaries = [];
-  const demoFrames = [];    // only used when nothing is being uploaded
+  const demoFrames = [];
+  const uploadManager = createUploadManager({ saving, sessionId, experimentId: exp.id, trialCount: trials.length });
 
   for (let i = 0; i < trials.length; i++) {
     const trial = trials[i];
     const state = exp.onTrialStart?.(trial, { tracker }) ?? {};
-  
-    // Show webcam during setup/calibration,
-  // but allow task trials to hide the participant's hand.
-  video.style.opacity =
-    trial.showCamera === false
-      ? "0"
-      : "1";
 
+    video.style.opacity = trial.showCamera === false ? "0" : "1";
     ui.showScreen("screen-trial");
     ui.setProgress(i + 1, trials.length);
     ui.setHtml("#trial-prompt", trial.prompt ?? exp.trialPrompt ?? "");
     ui.setHtml("#live-readout", "");
-
     await ui.countdown(trial.countdownSec ?? 3);
 
     recorder.reset();
     await recordTrial({ video, tracker, ctx, canvas, exp, trial, state, recorder });
 
     const summary = exp.onTrialEnd?.({
-      frames: recorder.frames, events: recorder.events, trial, state,
+      frames: recorder.frames,
+      events: recorder.events,
+      trial,
+      state,
     }) ?? {};
 
-    trialSummaries.push({
+    const currentTrialSummary = {
       index: i,
       id: trial.id ?? `trial_${i}`,
       ...trial,
@@ -449,28 +180,17 @@ if (
       detectionRate: round(recorder.detectionRate(), 4),
       events: recorder.events,
       ...summary,
-    });
-
-    const currentTrialSummary = trialSummaries[trialSummaries.length - 1];
+    };
+    trialSummaries.push(currentTrialSummary);
 
     if (saving) {
-      /* Upload straight away, so someone who quits mid-study still leaves data. */
-      ui.showScreen("screen-saving");
-      const chunks = recorder.toChunks();
-      await fb.uploadTrialChunks(
-        sessionId, i, chunks,
-        { experimentId: exp.id, trialId: trial.id ?? `trial_${i}` },
-        (done, total) => ui.setText("#saving-text", `Saving... ${done}/${total}`)
-      );
-
-      /* Store detailed events/reach records in a separate per-trial document.
-         This prevents long experiments from exceeding Firestore's 1 MiB
-         single-document limit at the final session write. */
-      await fb.saveTrialSummary(sessionId, i, currentTrialSummary);
+      uploadManager.queueTrial({
+        trialIndex: i,
+        trialId: trial.id ?? `trial_${i}`,
+        chunks: recorder.toChunks(),
+        summary: currentTrialSummary,
+      });
     } else {
-      // Nowhere to upload to, so hold onto the frames and offer them as a
-      // download at the end. The file matches what fetch_data.py produces, so
-      // it can go straight into the Python analysis.
       demoFrames[i] = recorder.frames.slice();
     }
 
@@ -481,18 +201,12 @@ if (
     }
   }
 
-  /* ---- 7. Post-experiment feedback --------------------------------------- */
-  const feedbackRecord = await collectExperimentFeedback();
+  /* Tracking work is finished; release camera/MediaPipe before the final network flush. */
+  const trackerMeta = { delegate: tracker.delegate, errorCount: tracker.errorCount };
+  stopCamera(video);
+  tracker.close();
+  stage.hidden = true;
 
-  /* ---- 8. Session summary ----------------------------------------------- */
-  if (saving) {
-    ui.showScreen("screen-saving");
-    ui.setText("#saving-text", "Saving your results...");
-  }
-
-  /* Keep the parent session document intentionally small. Detailed arrays such
-     as `events` and `reaches` are already saved per trial in the
-     `trialSummaries` subcollection above. */
   const compactTrialSummaries = trialSummaries.map((t) => {
     const { events, reaches, ...compact } = t;
     return {
@@ -513,39 +227,75 @@ if (
     consent: consentRecord,
     demographics,
     comprehension: comprehensionRecord,
-    feedback: feedbackRecord,
     trials: compactTrialSummaries,
     trialSummaryStorage: "trialSummaries_subcollection",
+    postTaskSurveyStorage: "postTaskSurvey/response_if_completed",
     settings: { recording: RECORDING, trackerOptions: exp.trackerOptions ?? {} },
     environment: {
       ...getEnvironment(),
-      // "GPU" or "CPU". CPU machines run at a lower frame rate, which is worth
-      // knowing before you wonder why one participant's data looks coarse.
-      trackerDelegate: tracker.delegate,
-      trackerErrors: tracker.errorCount,
+      trackerDelegate: trackerMeta.delegate,
+      trackerErrors: trackerMeta.errorCount,
     },
-    runnerBuild: "firestore-v4-feedback-20260903",
-    schemaVersion: 4,
-};
+    runnerBuild: "v5.15.3-participant-flow-20260908",
+    schemaVersion: 5,
+  };
 
-  /* IMPORTANT: dev=1 intentionally disables Firebase uploads. Do not call
-     saveSession in development mode, otherwise the runner would still attempt
-     a final Firestore write even though per-trial chunks were never uploaded. */
+  /* ---- 6. CORE SAVE before the final questions. Real progress; no fake countdown. */
   if (saving) {
-    await fb.saveSession(sessionId, sessionDoc);
+    ui.showScreen("screen-saving");
+    ensureSavingProgressUi();
+    uploadManager.addFinalUnit();
+    updateSavingProgress(uploadManager.progress(), "Saving your game data...");
+
+    let slowTimer = setTimeout(() => {
+      updateSavingProgress(uploadManager.progress(), "Still saving — your connection is taking longer than usual. Please keep this page open.");
+    }, 15000);
+
+    try {
+      await uploadManager.flush();
+      updateSavingProgress(uploadManager.progress(), "Finishing your save...");
+      await fb.saveSession(sessionId, sessionDoc);
+      uploadManager.completeFinalUnit();
+      updateSavingProgress(uploadManager.progress(), "Saved.");
+    } finally {
+      clearTimeout(slowTimer);
+    }
   }
 
   if (saving && RECORDING.alsoDownloadLocally) {
     ui.downloadJson(`${sessionId}.json`, sessionDoc);
   }
 
-  /* ---- 8. Done ----------------------------------------------------------- */
-  stopCamera(video);
-  tracker.close();
-  stage.hidden = true;
+  /* ---- 7. Final participant questions. Core game data are already safe. */
+  let postTaskSurvey = null;
+  let postTaskSurveySavePromise = null;
+  if (exp.participantFlow?.postTaskSurvey && (!devMode || showPostInDev) && POST_TASK_QUESTIONS?.length) {
+    configureQuestionScreen({
+      title: "Final Questions",
+      subtitle: "Please answer the questions below to see your Treasure Hunt score.",
+      buttonText: "See My Score",
+    });
+    postTaskSurvey = await collectParticipantSurvey(POST_TASK_QUESTIONS, POST_TASK_LIKERT_SCALE);
 
-  // Show people what they just did. In demo mode this IS the point of the page.
-  ui.setHtml("#done-results", resultsTable(exp, trialSummaries));
+    if (saving) {
+      // Final survey upload starts immediately but never blocks the score screen.
+      postTaskSurveySavePromise = fb.savePostTaskSurvey(sessionId, {
+        experimentId: exp.id,
+        participantId: participant.participantId,
+        completedAt: new Date().toISOString(),
+        responses: postTaskSurvey,
+      }).catch((err) => {
+        console.warn("Post-task survey upload failed; core session is already saved.", err);
+      });
+    }
+  }
+
+  /* ---- 8. Score appears only after the post-task survey (or immediately in dev). */
+  const score = computeTreasureScore(trialSummaries);
+  ui.setHtml(
+    "#done-results",
+    exp.participantFlow?.showScore ? scoreCard(score) : resultsTable(exp, trialSummaries)
+  );
 
   if (saving) {
     ui.setText("#done-session-id", sessionId);
@@ -554,388 +304,578 @@ if (
     ui.$("#done-demo").hidden = false;
     ui.$("#btn-download-demo").onclick = () => {
       const copy = structuredClone(sessionDoc);
+      copy.postTaskSurvey = postTaskSurvey;
       copy.trials.forEach((t, i) => { t.frames = demoFrames[i] ?? []; });
       ui.downloadJson(`${sessionId}.json`, copy);
     };
   }
-  ui.showScreen("screen-done");
 
+  if (exp.participantFlow?.showScore) {
+    prepareTreasureDoneScreen(score);
+  }
+  ui.showScreen("screen-done");
   if (saving && STUDY.completionRedirectUrl) {
     ui.setText("#done-redirect-note", "Returning you to Prolific in 5 seconds...");
-    await ui.sleep(5000);
+    if (postTaskSurveySavePromise) {
+      await Promise.race([postTaskSurveySavePromise, ui.sleep(1500)]);
+    }
+    await ui.sleep(3500);
     location.href = STUDY.completionRedirectUrl;
   }
 }
 
+function configureQuestionScreen({ title, subtitle, buttonText }) {
+  const screen = ui.$("#screen-demographics");
+  if (!screen) return;
+  const h2 = screen.querySelector("h2");
+  if (h2) h2.textContent = title;
 
-/* -------------------------------------------------------------------------
- * Post-experiment feedback questionnaire.
- * Likert responses are required; the two text boxes are optional.
- * This is intentionally stored in the small parent session document.
- * ---------------------------------------------------------------------- */
-function ensureFeedbackStyles() {
-  if (document.getElementById("feedback-questionnaire-styles")) return;
+  let note = screen.querySelector("#v515-question-note");
+  if (!note) {
+    note = document.createElement("p");
+    note.id = "v515-question-note";
+    note.className = "subtle";
+    const form = ui.$("#demographics-form");
+    if (form) form.before(note);
+  }
+  note.textContent = subtitle || "";
+  note.hidden = !subtitle;
 
+  const button = ui.$("#btn-demographics");
+  if (button) button.textContent = buttonText;
+}
+
+async function collectQuestionSet(questions) {
+  const formEl = ui.$("#demographics-form");
+  renderForm(formEl, questions);
+  ui.showScreen("screen-demographics");
+  while (true) {
+    await ui.waitForClick("#btn-demographics");
+    const { ok, values, firstError } = readForm(formEl, questions);
+    if (ok) return values;
+    focusField(formEl, firstError);
+  }
+}
+
+/* Participant-facing, sectioned renderer for the longer post-task survey.
+   This is separate from renderForm() so the short pre-task page can stay simple
+   while the final survey gets clear section headings and compact Likert rows. */
+async function collectParticipantSurvey(questions, likertScale = {}) {
+  const formEl = ui.$("#demographics-form");
+  const button = ui.$("#btn-demographics");
+  ensureParticipantSurveyStyles();
+  formEl.innerHTML = "";
+  formEl.classList.add("v5151-final-survey");
+
+  let currentSection = null;
+  let sectionBody = null;
+
+  for (const q of questions) {
+    if (q.section !== currentSection) {
+      currentSection = q.section || "Questions";
+      const section = document.createElement("section");
+      section.className = "v5151-survey-section";
+      section.innerHTML = `<h3>${escapeHtml(currentSection)}</h3><div class="v5151-section-body"></div>`;
+      formEl.appendChild(section);
+      sectionBody = section.querySelector(".v5151-section-body");
+    }
+    sectionBody.appendChild(buildParticipantSurveyQuestion(q, likertScale));
+  }
+
+  const distractionSelect = formEl.querySelector('[name="distracted"]');
+  const distractionWrap = formEl.querySelector('[data-question-id="distractionDescription"]');
+  const syncDistraction = () => {
+    if (!distractionWrap || !distractionSelect) return;
+    const show = distractionSelect.value === "Yes" || distractionSelect.value === "Not sure";
+    distractionWrap.hidden = !show;
+    const input = distractionWrap.querySelector("textarea,input,select");
+    if (!show && input) input.value = "";
+  };
+  distractionSelect?.addEventListener("change", syncDistraction);
+  syncDistraction();
+
+  ui.showScreen("screen-demographics");
+
+  while (true) {
+    await ui.waitForClick("#btn-demographics");
+    const result = readParticipantSurvey(formEl, questions);
+    clearSurveyErrors(formEl);
+    if (result.ok) {
+      formEl.classList.remove("v5151-final-survey");
+      return result.values;
+    }
+
+    const first = formEl.querySelector(`[data-question-id="${cssEscape(result.firstError)}"]`);
+    if (first) {
+      first.classList.add("v5151-has-error");
+      first.scrollIntoView({ behavior: "smooth", block: "center" });
+      first.querySelector("input,select,textarea")?.focus({ preventScroll: true });
+    }
+  }
+}
+
+function buildParticipantSurveyQuestion(q, likertScale) {
+  const wrap = document.createElement("div");
+  wrap.className = `v5151-survey-question ${q.type === "likert" ? "v5151-likert-question" : ""}`;
+  wrap.dataset.questionId = q.id;
+
+  const label = document.createElement("div");
+  label.className = "v5151-question-label";
+  label.innerHTML = `${escapeHtml(q.label)}${q.required ? ' <span class="v5151-required">*</span>' : ""}`;
+  wrap.appendChild(label);
+
+  if (q.help) {
+    const help = document.createElement("div");
+    help.className = "v5151-question-help";
+    help.textContent = q.help;
+    wrap.appendChild(help);
+  }
+
+  if (q.type === "likert") {
+    const scale = document.createElement("div");
+    scale.className = "v5151-likert-scale";
+    for (let value = 1; value <= 5; value++) {
+      const option = document.createElement("label");
+      option.className = "v5151-likert-option";
+      option.innerHTML = `
+        <input type="radio" name="${escapeHtml(q.id)}" value="${value}">
+        <span class="v5151-likert-number">${value}</span>
+        <span class="v5151-likert-text">${escapeHtml(likertScale[value] || "")}</span>`;
+      scale.appendChild(option);
+    }
+    wrap.appendChild(scale);
+  } else if (q.type === "select") {
+    const select = document.createElement("select");
+    select.name = q.id;
+    select.innerHTML = `<option value="">Select an option</option>` +
+      (q.options || []).map((opt) => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`).join("");
+    wrap.appendChild(select);
+  } else if (q.type === "number") {
+    const input = document.createElement("input");
+    input.type = "number";
+    input.name = q.id;
+    if (Number.isFinite(q.min)) input.min = String(q.min);
+    if (Number.isFinite(q.max)) input.max = String(q.max);
+    if (q.placeholder) input.placeholder = q.placeholder;
+    input.step = "any";
+    wrap.appendChild(input);
+  } else if (q.type === "textarea") {
+    const textarea = document.createElement("textarea");
+    textarea.name = q.id;
+    textarea.rows = 3;
+    if (q.placeholder) textarea.placeholder = q.placeholder;
+    wrap.appendChild(textarea);
+  } else {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.name = q.id;
+    if (q.placeholder) input.placeholder = q.placeholder;
+    wrap.appendChild(input);
+  }
+
+  const error = document.createElement("div");
+  error.className = "v5151-question-error";
+  error.textContent = "Please answer this question.";
+  wrap.appendChild(error);
+  return wrap;
+}
+
+function readParticipantSurvey(formEl, questions) {
+  const values = {};
+  let firstError = null;
+
+  for (const q of questions) {
+    const wrap = formEl.querySelector(`[data-question-id="${cssEscape(q.id)}"]`);
+    if (!wrap || wrap.hidden) {
+      values[q.id] = "";
+      continue;
+    }
+
+    let value = "";
+    if (q.type === "likert") {
+      const checked = wrap.querySelector(`input[name="${cssEscape(q.id)}"]:checked`);
+      value = checked ? Number(checked.value) : "";
+    } else {
+      const field = wrap.querySelector(`[name="${cssEscape(q.id)}"]`);
+      value = field?.value?.trim?.() ?? "";
+      if (q.type === "number" && value !== "") value = Number(value);
+    }
+
+    values[q.id] = value;
+
+    const missing = q.required && (value === "" || value == null);
+    const outOfRange = q.type === "number" && value !== "" && (
+      (Number.isFinite(q.min) && value < q.min) ||
+      (Number.isFinite(q.max) && value > q.max)
+    );
+
+    if ((missing || outOfRange) && firstError == null) firstError = q.id;
+  }
+
+  return { ok: firstError == null, values, firstError };
+}
+
+function clearSurveyErrors(formEl) {
+  formEl.querySelectorAll(".v5151-has-error").forEach((el) => el.classList.remove("v5151-has-error"));
+}
+
+function ensureParticipantSurveyStyles() {
+  if (document.getElementById("v5151-final-survey-style")) return;
   const style = document.createElement("style");
-  style.id = "feedback-questionnaire-styles";
+  style.id = "v5151-final-survey-style";
   style.textContent = `
-    body:has(#screen-feedback.visible) main {
-      max-width: 1040px;
+    body:has(#screen-demographics.visible) main { max-width:920px; }
+    #screen-demographics > h2 { margin-bottom:4px; }
+    #v515-question-note:not([hidden]) { max-width:720px;margin:4px auto 18px;text-align:center;color:#aebed2; }
+    .v5151-final-survey { display:grid;gap:16px;margin-top:18px; }
+    .v5151-survey-section {
+      padding:18px 20px 20px;border-radius:20px;
+      background:rgba(14,31,60,.72);border:1px solid rgba(151,196,255,.14);
+      box-shadow:0 12px 30px rgba(0,0,0,.12);
     }
-
-    #screen-feedback {
-      text-align: left;
-      padding-bottom: 42px;
+    .v5151-survey-section h3 {
+      margin:0 0 13px;color:#f2f7ff;font:850 1.18rem/1.2 system-ui,sans-serif;
+      letter-spacing:.01em;
     }
-
-    #screen-feedback .feedback-header {
-      text-align: center;
-      margin-bottom: 22px;
+    .v5151-section-body { display:grid;gap:13px; }
+    .v5151-survey-question {
+      padding:13px 14px;border-radius:14px;background:rgba(255,255,255,.035);
+      border:1px solid rgba(190,217,255,.08);
     }
-
-    #screen-feedback .feedback-header h2 {
-      margin-bottom: 8px;
-      font-size: clamp(1.9rem, 3vw, 2.45rem);
+    .v5151-question-label { color:#edf4ff;font-weight:730;line-height:1.38; }
+    .v5151-question-help { margin:5px 0 8px;color:#aebed2;font-size:.9rem;line-height:1.4; }
+    .v5151-required { color:#ffcf77; }
+    .v5151-survey-question select,
+    .v5151-survey-question input[type="text"],
+    .v5151-survey-question input[type="number"],
+    .v5151-survey-question textarea {
+      width:100%;box-sizing:border-box;margin-top:9px;padding:10px 12px;border-radius:11px;
+      border:1px solid rgba(173,205,246,.22);background:#0b1a35;color:#f4f8ff;
+      font:600 .96rem/1.3 system-ui,sans-serif;
     }
-
-    #screen-feedback .feedback-intro {
-      color: #c7d4e7;
-      margin: 0 auto 14px;
-      max-width: 760px;
-      line-height: 1.45;
+    .v5151-survey-question textarea { resize:vertical;min-height:78px; }
+    .v5151-likert-scale { display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-top:10px; }
+    .v5151-likert-option {
+      min-height:78px;padding:9px 5px 8px;border-radius:11px;cursor:pointer;
+      display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:5px;
+      background:rgba(255,255,255,.035);border:1px solid rgba(173,205,246,.12);
+      color:#c9d8ec;text-align:center;
     }
-
-    #screen-feedback .feedback-scale-legend {
-      max-width: 900px;
-      margin: 12px auto 22px;
-      padding: 12px 16px;
-      border-radius: 14px;
-      background: rgba(122, 164, 226, .08);
-      border: 1px solid rgba(158, 196, 246, .14);
-      color: #dce8f8;
-      text-align: center;
-      font-size: .93rem;
-      line-height: 1.45;
+    .v5151-likert-option:has(input:checked) {
+      background:rgba(94,146,233,.18);border-color:rgba(139,185,255,.58);
+      box-shadow:0 0 0 1px rgba(139,185,255,.16) inset;
     }
-
-    #feedback-form {
-      display: grid;
-      gap: 22px;
-      max-width: 960px;
-      margin: 0 auto;
-    }
-
-    .feedback-section {
-      display: grid;
-      gap: 10px;
-    }
-
-    .feedback-section-title {
-      margin: 4px 0 2px;
-      color: #9fc8ff;
-      font-size: .88rem;
-      font-weight: 850;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-    }
-
-    .feedback-row {
-      display: grid;
-      grid-template-columns: minmax(260px, 1fr) minmax(330px, 430px);
-      align-items: center;
-      gap: 22px;
-      padding: 15px 18px;
-      border-radius: 16px;
-      background: rgba(15, 31, 58, .72);
-      border: 1px solid rgba(158, 196, 246, .12);
-    }
-
-    .feedback-row.missing {
-      border-color: rgba(255, 138, 138, .85);
-      box-shadow: 0 0 0 2px rgba(255, 96, 96, .10);
-    }
-
-    .feedback-question {
-      color: #eef5ff;
-      font-size: 1rem;
-      line-height: 1.38;
-      font-weight: 650;
-    }
-
-    .feedback-required {
-      color: #ffb2b2;
-      margin-left: 3px;
-    }
-
-    .feedback-likert {
-      display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      gap: 8px;
-    }
-
-    .feedback-choice {
-      position: relative;
-      display: grid;
-      place-items: center;
-      min-height: 44px;
-      border-radius: 12px;
-      background: rgba(255,255,255,.045);
-      border: 1px solid rgba(182, 210, 246, .18);
-      cursor: pointer;
-      user-select: none;
-      transition: transform .12s ease, background .12s ease, border-color .12s ease;
-    }
-
-    .feedback-choice:hover {
-      transform: translateY(-1px);
-      background: rgba(123, 173, 242, .10);
-      border-color: rgba(163, 205, 255, .42);
-    }
-
-    .feedback-choice input {
-      position: absolute;
-      opacity: 0;
-      pointer-events: none;
-    }
-
-    .feedback-choice .feedback-number {
-      font-weight: 850;
-      color: #dbe9fb;
-      font-size: 1.04rem;
-    }
-
-    .feedback-choice:has(input:checked) {
-      background: #3768a8;
-      border-color: #9bc9ff;
-      box-shadow: 0 0 16px rgba(93, 159, 238, .24);
-    }
-
-    .feedback-choice:has(input:checked) .feedback-number {
-      color: #ffffff;
-    }
-
-    .feedback-end-labels {
-      grid-column: 2;
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      margin-top: -5px;
-      padding: 0 4px 2px;
-      color: #9aabc2;
-      font-size: .75rem;
-    }
-
-    .feedback-text-row {
-      display: grid;
-      gap: 9px;
-      padding: 16px 18px;
-      border-radius: 16px;
-      background: rgba(15, 31, 58, .72);
-      border: 1px solid rgba(158, 196, 246, .12);
-    }
-
-    .feedback-text-row textarea {
-      width: 100%;
-      min-height: 92px;
-      resize: vertical;
-      box-sizing: border-box;
-      border-radius: 12px;
-      border: 1px solid rgba(168, 204, 248, .20);
-      background: rgba(4, 14, 30, .72);
-      color: #f2f7ff;
-      padding: 12px 13px;
-      font: 500 1rem/1.4 system-ui, sans-serif;
-    }
-
-    #feedback-error {
-      min-height: 1.4em;
-      margin: 6px 0 0;
-      text-align: center;
-      color: #ffb4b4;
-      font-weight: 700;
-    }
-
-    #btn-feedback-submit {
-      width: min(360px, 100%);
-      margin: 10px auto 0;
-      display: block;
-      font-size: 1.08rem;
-    }
-
-    @media (max-width: 760px) {
-      .feedback-row {
-        grid-template-columns: 1fr;
-        gap: 12px;
-      }
-
-      .feedback-end-labels {
-        grid-column: 1;
-      }
+    .v5151-likert-option input { margin:0;accent-color:#8fb8ff; }
+    .v5151-likert-number { font-weight:900;color:#f0f6ff; }
+    .v5151-likert-text { font-size:.72rem;line-height:1.18; }
+    .v5151-question-error { display:none;margin-top:7px;color:#ffb5ad;font-size:.85rem;font-weight:700; }
+    .v5151-has-error { border-color:rgba(255,142,130,.60); }
+    .v5151-has-error .v5151-question-error { display:block; }
+    @media (max-width:720px) {
+      .v5151-survey-section { padding:15px 12px; }
+      .v5151-likert-scale { grid-template-columns:1fr; }
+      .v5151-likert-option { min-height:0;flex-direction:row;justify-content:flex-start;text-align:left;padding:9px 10px; }
+      .v5151-likert-text { font-size:.86rem; }
     }
   `;
   document.head.appendChild(style);
 }
 
-function renderFeedbackQuestionnaire(container, questions) {
-  container.innerHTML = "";
-  let currentSection = null;
-  let sectionEl = null;
-
-  for (const q of questions) {
-    if (q.section !== currentSection) {
-      currentSection = q.section;
-      sectionEl = document.createElement("section");
-      sectionEl.className = "feedback-section";
-
-      const heading = document.createElement("h3");
-      heading.className = "feedback-section-title";
-      heading.textContent = currentSection;
-      sectionEl.appendChild(heading);
-      container.appendChild(sectionEl);
-    }
-
-    if (q.type === "likert") {
-      const row = document.createElement("div");
-      row.className = "feedback-row";
-      row.dataset.feedbackId = q.id;
-
-      const question = document.createElement("div");
-      question.className = "feedback-question";
-      question.textContent = q.text;
-      if (q.required) {
-        const req = document.createElement("span");
-        req.className = "feedback-required";
-        req.textContent = " *";
-        question.appendChild(req);
-      }
-
-      const scale = document.createElement("div");
-      scale.className = "feedback-likert";
-
-      for (let value = FEEDBACK_SCALE.min; value <= FEEDBACK_SCALE.max; value++) {
-        const label = document.createElement("label");
-        label.className = "feedback-choice";
-        label.title = FEEDBACK_SCALE.labels[value] ?? String(value);
-
-        const input = document.createElement("input");
-        input.type = "radio";
-        input.name = `feedback-${q.id}`;
-        input.value = String(value);
-
-        const num = document.createElement("span");
-        num.className = "feedback-number";
-        num.textContent = String(value);
-
-        label.append(input, num);
-        scale.appendChild(label);
-      }
-
-      const endpoints = document.createElement("div");
-      endpoints.className = "feedback-end-labels";
-      endpoints.innerHTML = "<span>Strongly disagree</span><span>Strongly agree</span>";
-
-      row.append(question, scale, endpoints);
-      sectionEl.appendChild(row);
-    } else if (q.type === "textarea") {
-      const row = document.createElement("div");
-      row.className = "feedback-text-row";
-      row.dataset.feedbackId = q.id;
-
-      const question = document.createElement("label");
-      question.className = "feedback-question";
-      question.htmlFor = `feedback-${q.id}`;
-      question.textContent = q.text;
-
-      const textarea = document.createElement("textarea");
-      textarea.id = `feedback-${q.id}`;
-      textarea.placeholder = q.placeholder ?? "Optional";
-
-      row.append(question, textarea);
-      sectionEl.appendChild(row);
-    }
-  }
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }
 
-function readFeedbackQuestionnaire(questions) {
-  const responses = {};
-  const items = [];
-  const missing = [];
-
-  for (const q of questions) {
-    let response = null;
-
-    if (q.type === "likert") {
-      const checked = document.querySelector(`input[name="feedback-${q.id}"]:checked`);
-      response = checked ? Number(checked.value) : null;
-
-      const row = document.querySelector(`[data-feedback-id="${q.id}"]`);
-      row?.classList.toggle("missing", q.required && response == null);
-
-      if (q.required && response == null) missing.push(q.id);
-    } else if (q.type === "textarea") {
-      const el = document.getElementById(`feedback-${q.id}`);
-      const text = (el?.value ?? "").trim();
-      response = text || null;
-    }
-
-    responses[q.id] = response;
-    items.push({
-      id: q.id,
-      text: q.text,
-      type: q.type,
-      response,
-    });
-  }
-
-  return { responses, items, missing };
+function cssEscape(value) {
+  if (window.CSS?.escape) return CSS.escape(String(value));
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
 
-async function collectExperimentFeedback() {
-  const screen = ui.$("#screen-feedback");
-  const form = ui.$("#feedback-form");
-  const error = ui.$("#feedback-error");
-
-  if (!screen || !form) {
-    throw new Error(
-      "Feedback screen is missing from index.html. Run patch-index-feedback-v1.ps1."
-    );
-  }
-
-  ensureFeedbackStyles();
-  renderFeedbackQuestionnaire(form, FEEDBACK_QUESTIONS);
-  if (error) error.textContent = "";
-
-  ui.showScreen("screen-feedback");
+async function runComprehensionIfNeeded(exp, video, tracker) {
+  if (!exp.comprehension?.questions?.length) return null;
+  const questions = exp.comprehension.questions;
+  const correctAnswers = exp.comprehension.answers ?? {};
+  let attempts = 0;
+  let firstAttemptCorrect = null;
+  const attemptRecords = [];
 
   while (true) {
-    await ui.waitForClick("#btn-feedback-submit");
-    const result = readFeedbackQuestionnaire(FEEDBACK_QUESTIONS);
+    attempts += 1;
+    const formEl = ui.$("#comprehension-form");
+    renderForm(formEl, questions);
+    ui.setText("#comprehension-feedback", "");
+    ui.showScreen("screen-comprehension");
 
-    if (result.missing.length === 0) {
-      return {
-        questionnaireVersion: FEEDBACK_QUESTIONNAIRE_VERSION,
-        completedAt: new Date().toISOString(),
-        scale: {
-          min: FEEDBACK_SCALE.min,
-          max: FEEDBACK_SCALE.max,
-          labels: FEEDBACK_SCALE.labels,
-        },
-        responses: result.responses,
-        items: result.items,
-      };
+    let values;
+    while (true) {
+      await ui.waitForClick("#btn-comprehension");
+      const result = readForm(formEl, questions);
+      if (result.ok) { values = result.values; break; }
+      focusField(formEl, result.firstError);
     }
 
-    if (error) {
-      error.textContent = "Please answer all 10 rating questions before continuing.";
+    const items = questions.map((q) => ({
+      id: q.id,
+      response: values[q.id],
+      correctAnswer: correctAnswers[q.id],
+      correct: values[q.id] === correctAnswers[q.id],
+    }));
+    const correctCount = items.filter((item) => item.correct).length;
+    const passed = correctCount === questions.length;
+    if (attempts === 1) firstAttemptCorrect = correctCount;
+    attemptRecords.push({ attempt: attempts, correctCount, total: questions.length, passed, items });
+
+    if (passed) {
+      return { passed: true, attempts, firstAttemptCorrect, totalQuestions: questions.length, attemptRecords };
     }
 
-    const firstMissing = document.querySelector(
-      `[data-feedback-id="${result.missing[0]}"]`
-    );
-    firstMissing?.scrollIntoView({ behavior: "smooth", block: "center" });
+    ui.setText("#comprehension-feedback", `You answered ${correctCount} of ${questions.length} correctly. Please review the instructions and try again.`);
+    await ui.sleep(1200);
+    ui.setHtml("#instructions-text", exp.instructions ?? "");
+    ui.showScreen("screen-instructions");
+    if (exp.participantFlow?.gestureStart) await waitForFistOrClick(video, tracker, "#btn-start");
+    else await ui.waitForClick("#btn-start");
   }
 }
 
+function landmarkDistance(a, b) {
+  if (!a || !b) return Infinity;
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function looksLikeFist(landmarks) {
+  if (!landmarks || landmarks.length < 21) return false;
+  const palmIds = [0, 5, 9, 13, 17];
+  const palm = palmIds.reduce((acc, i) => ({ x: acc.x + landmarks[i].x, y: acc.y + landmarks[i].y }), { x: 0, y: 0 });
+  palm.x /= palmIds.length;
+  palm.y /= palmIds.length;
+  const palmWidth = landmarkDistance(landmarks[5], landmarks[17]);
+  if (!Number.isFinite(palmWidth) || palmWidth < 0.015) return false;
+  const curledTips = [8, 12, 16, 20].filter((i) => landmarkDistance(landmarks[i], palm) < palmWidth * 1.08).length;
+  return curledTips >= 3;
+}
+
+async function waitForFistOrClick(video, tracker, buttonSelector) {
+  const button = ui.$(buttonSelector);
+  if (!button) return;
+  button.textContent = "Or click here to start";
+
+  let done = false;
+  const onClick = () => { done = true; };
+  button.addEventListener("click", onClick);
+
+  let fistSince = null;
+  let lastVideoTime = -1;
+  const hint = document.getElementById("treasure-gesture-start-status");
+
+  try {
+    while (!done) {
+      if (video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
+        const res = tracker.track(video, performance.now());
+        const fist = (res.landmarks ?? []).some(looksLikeFist);
+        if (fist) {
+          if (fistSince == null) fistSince = performance.now();
+          const held = performance.now() - fistSince;
+          if (hint) hint.textContent = held >= 250 ? "Keep holding…" : "Fist detected";
+          if (held >= 650) done = true;
+        } else {
+          fistSince = null;
+          if (hint) hint.textContent = "";
+        }
+      }
+      await nextFrame();
+    }
+  } finally {
+    button.removeEventListener("click", onClick);
+  }
+}
+
+function ensureSavingProgressUi() {
+  const screen = ui.$("#screen-saving");
+  if (!screen || document.getElementById("v515-saving-progress")) return;
+  const shell = document.createElement("div");
+  shell.id = "v515-saving-progress";
+  shell.style.cssText = "width:min(520px,86vw);margin:18px auto 0;text-align:left;";
+  shell.innerHTML = `
+    <div style="height:14px;border-radius:999px;background:rgba(255,255,255,.11);overflow:hidden;border:1px solid rgba(255,255,255,.08);">
+      <div id="v515-saving-bar" style="height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,#77a9ff,#98d9ff);transition:width .22s ease;"></div>
+    </div>
+    <div id="v515-saving-percent" style="margin-top:8px;text-align:center;font-weight:800;">0%</div>`;
+  const savingText = ui.$("#saving-text");
+  (savingText || screen.lastElementChild)?.after(shell);
+}
+
+function updateSavingProgress(progress, message) {
+  ensureSavingProgressUi();
+  const pct = Math.max(0, Math.min(100, Math.round(progress * 100)));
+  const bar = document.getElementById("v515-saving-bar");
+  const label = document.getElementById("v515-saving-percent");
+  if (bar) bar.style.width = `${pct}%`;
+  if (label) label.textContent = `${pct}%`;
+  if (message) ui.setText("#saving-text", message);
+}
+
+function createUploadManager({ saving, sessionId, experimentId, trialCount }) {
+  let chain = Promise.resolve();
+  let totalUnits = 0;
+  let completedUnits = 0;
+  let finalUnitAdded = false;
+  let finalUnitComplete = false;
+  let firstError = null;
+
+  const progress = () => totalUnits > 0 ? completedUnits / totalUnits : 0;
+
+  const queueTrial = ({ trialIndex, trialId, chunks, summary }) => {
+    if (!saving) return;
+    const chunkCount = Math.max(1, chunks.length);
+    totalUnits += chunkCount + 1; // chunks + one detailed summary document
+
+    chain = chain.then(async () => {
+      let lastDone = 0;
+      await fb.uploadTrialChunks(
+        sessionId,
+        trialIndex,
+        chunks,
+        { experimentId, trialId },
+        (done) => {
+          const delta = Math.max(0, done - lastDone);
+          lastDone = done;
+          completedUnits += delta;
+          updateSavingProgress(progress());
+        }
+      );
+      // Empty-chunk edge case still counts as one chunk unit.
+      if (chunks.length === 0) completedUnits += 1;
+      await fb.saveTrialSummary(sessionId, trialIndex, summary);
+      completedUnits += 1;
+      updateSavingProgress(progress());
+    }).catch((err) => {
+      firstError ??= err;
+    });
+  };
+
+  return {
+    queueTrial,
+    addFinalUnit() {
+      if (!finalUnitAdded) { totalUnits += 1; finalUnitAdded = true; }
+    },
+    completeFinalUnit() {
+      if (finalUnitAdded && !finalUnitComplete) {
+        completedUnits += 1;
+        finalUnitComplete = true;
+      }
+    },
+    progress,
+    async flush() {
+      await chain;
+      if (firstError) throw new Error(`A background upload failed: ${firstError.message || firstError}`);
+    },
+    trialCount,
+  };
+}
+
+function computeTreasureScore(summaries) {
+  const reaches = summaries
+    .filter((t) => t.kind === "baseline_reaching")
+    .flatMap((t) => Array.isArray(t.reaches) ? t.reaches : [])
+    .filter((r) => !r.timedOut && !r.invalid);
+
+  const hits = reaches.filter((r) => {
+    if (r.endpointInsideTarget === 1) return true;
+    if (Number.isFinite(r.initialDistanceToTarget)) return r.initialDistanceToTarget <= 0.10;
+    return false;
+  }).length;
+  const planned = summaries
+    .filter((t) => t.kind === "baseline_reaching")
+    .reduce((sum, t) => sum + (Number.isFinite(t.requestedReaches) ? t.requestedReaches : 0), 0);
+  return { hits, total: planned || reaches.length };
+}
+
+function scoreCard(score) {
+  const total = Math.max(0, score.total || 0);
+  const hits = Math.max(0, score.hits || 0);
+  return `
+    <div class="v5151-treasure-result">
+      <div class="v5151-result-sparkles" aria-hidden="true">
+        <span>✦</span><span>✧</span><span>✦</span><span>✧</span>
+      </div>
+      <svg class="v5151-result-chest" viewBox="0 0 220 150" aria-hidden="true">
+        <defs>
+          <linearGradient id="v5151ResultChestBody" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#c97830"/><stop offset=".58" stop-color="#8b4922"/><stop offset="1" stop-color="#4d2918"/>
+          </linearGradient>
+          <linearGradient id="v5151ResultChestLid" x1="0" y1="0" x2="0" y2="1">
+            <stop stop-color="#e8a34f"/><stop offset="1" stop-color="#7b3d1e"/>
+          </linearGradient>
+          <linearGradient id="v5151ResultGem" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#eef8ff"/><stop offset=".45" stop-color="#77b4ff"/><stop offset="1" stop-color="#5a4ac8"/>
+          </linearGradient>
+        </defs>
+        <g class="v5151-open-lid">
+          <path d="M51 69 Q63 24 110 24 Q157 24 169 69 Z" fill="url(#v5151ResultChestLid)" stroke="#efc56b" stroke-width="5"/>
+          <path d="M76 36V70M144 36V70" stroke="#e8bd62" stroke-width="6"/>
+        </g>
+        <g class="v5151-gem-pop">
+          <path d="M91 61 L110 45 L129 61 L122 89 L98 89 Z" fill="url(#v5151ResultGem)" stroke="#f4f9ff" stroke-width="4"/>
+        </g>
+        <rect x="45" y="72" width="130" height="60" rx="10" fill="url(#v5151ResultChestBody)" stroke="#efc56b" stroke-width="5"/>
+        <path d="M75 73V132M145 73V132" stroke="#e8bd62" stroke-width="6"/>
+        <rect x="99" y="90" width="22" height="20" rx="4" fill="#ffe49a" stroke="#9c6824" stroke-width="3"/>
+      </svg>
+      <div class="v5151-result-kicker">YOUR TREASURE HAUL</div>
+      <div class="v5151-result-score">${hits} <span>of</span> ${total}</div>
+      <div class="v5151-result-message">You collected ${hits} of ${total} gems!</div>
+    </div>`;
+}
+
+function prepareTreasureDoneScreen(score) {
+  ensureTreasureDoneStyles();
+  const screen = ui.$("#screen-done");
+  const title = screen?.querySelector("h2");
+  if (title) title.textContent = "TREASURE HUNT COMPLETE!";
+
+  const subtle = screen?.querySelector("p.subtle");
+  if (subtle && /session|saved|complete|done/i.test(subtle.textContent || "")) {
+    subtle.textContent = "Thanks for playing!";
+  }
+}
+
+function ensureTreasureDoneStyles() {
+  if (document.getElementById("v5151-treasure-done-style")) return;
+  const style = document.createElement("style");
+  style.id = "v5151-treasure-done-style";
+  style.textContent = `
+    body:has(#screen-done.visible) main { max-width:760px; }
+    #screen-done { text-align:center; }
+    #screen-done > h2 { font-size:clamp(2rem,5vw,3rem);margin-bottom:5px;letter-spacing:.015em; }
+    .v5151-treasure-result {
+      position:relative;overflow:hidden;max-width:560px;margin:16px auto 18px;padding:24px 24px 26px;
+      border-radius:26px;background:radial-gradient(circle at 50% 20%,#1b3b72 0,#0d1f43 48%,#08152e 100%);
+      border:1px solid rgba(151,196,255,.16);box-shadow:0 22px 60px rgba(0,0,0,.28);
+    }
+    .v5151-result-chest { width:min(230px,56vw);height:auto;filter:drop-shadow(0 14px 20px rgba(0,0,0,.28)); }
+    .v5151-open-lid { transform-origin:110px 69px;animation:v5151LidOpen .75s cubic-bezier(.2,.8,.2,1) both; }
+    .v5151-gem-pop { transform-origin:110px 75px;animation:v5151GemPop 1.4s .35s ease-out both; }
+    .v5151-result-kicker { margin-top:2px;color:#a9c7ef;font-weight:850;letter-spacing:.08em;font-size:.86rem; }
+    .v5151-result-score { margin:4px 0 1px;color:#f7fbff;font:950 clamp(2.7rem,7vw,4rem)/1 system-ui,sans-serif; }
+    .v5151-result-score span { font-size:.38em;color:#9fb8d8;font-weight:750;vertical-align:middle; }
+    .v5151-result-message { margin-top:7px;color:#dceaff;font-weight:780;font-size:1.08rem; }
+    .v5151-result-sparkles span { position:absolute;color:#dceeff;text-shadow:0 0 12px rgba(143,190,255,.9);animation:v5151Sparkle 1.8s ease-in-out infinite; }
+    .v5151-result-sparkles span:nth-child(1){left:17%;top:21%;font-size:1.4rem}
+    .v5151-result-sparkles span:nth-child(2){right:18%;top:26%;font-size:1.1rem;animation-delay:.35s}
+    .v5151-result-sparkles span:nth-child(3){left:26%;top:43%;font-size:.9rem;animation-delay:.7s}
+    .v5151-result-sparkles span:nth-child(4){right:26%;top:45%;font-size:1rem;animation-delay:1s}
+    @keyframes v5151LidOpen { from{transform:translateY(20px) rotate(0deg);opacity:.7} to{transform:translateY(0) rotate(0deg);opacity:1} }
+    @keyframes v5151GemPop { 0%{transform:translateY(28px) scale(.55);opacity:0} 55%{transform:translateY(-10px) scale(1.12);opacity:1} 100%{transform:translateY(0) scale(1);opacity:1} }
+    @keyframes v5151Sparkle { 0%,100%{opacity:.25;transform:scale(.85)} 50%{opacity:1;transform:scale(1.2)} }
+  `;
+  document.head.appendChild(style);
+}
 
 /* -------------------------------------------------------------------------
  * Draw one checkbox per consent statement and wait until all are ticked.
