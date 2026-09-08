@@ -1,31 +1,7 @@
 rules_version = '2';
 
-/* =============================================================================
- *  Security rules for your study database.
- * =============================================================================
- *
- *  COPY EVERYTHING IN THIS FILE into:
- *    Firebase Console -> Build -> Firestore Database -> Rules -> Publish
- *
- *  WHAT THESE RULES DO
- *    - Participants may CREATE their own session metadata, raw-data chunks,
- *      and per-trial summary documents.
- *    - Nobody using the website can READ, EDIT, or DELETE anything, including
- *      their own data.
- *    - You read the data with analysis/fetch_data.py, which authenticates as
- *      you (a project owner) and bypasses these client rules.
- *
- *  DATA LAYOUT
- *    sessions/{sessionId}
- *      - compact session metadata / compact trial summaries
- *
- *    sessions/{sessionId}/chunks/{chunkId}
- *      - raw frame-by-frame data, split into chunks
- *
- *    sessions/{sessionId}/trialSummaries/{trialId}
- *      - detailed events and reach records for one trial/block
- * ===========================================================================*/
-
+/* V5.15 rules: same participant-write / no-read policy, plus tightly scoped
+ * idempotent retry updates and a bonus post-task survey subcollection. */
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -33,51 +9,74 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Data may only be filed under the uid of the participant writing it.
     function ownedByCaller() {
       return request.resource.data.uid == request.auth.uid;
     }
 
-    match /sessions/{sessionId} {
+    function sameOwner() {
+      return signedIn()
+             && resource.data.uid == request.auth.uid
+             && request.resource.data.uid == request.auth.uid;
+    }
 
+    match /sessions/{sessionId} {
       allow create: if signedIn()
                     && ownedByCaller()
                     && request.resource.data.keys().hasAll(
                          ['uid', 'sessionId', 'experimentId', 'startedAt'])
                     && request.resource.data.sessionId == sessionId
                     && request.resource.data.experimentId is string
-                    && request.resource.data.experimentId.size() <= 64
+                    && request.resource.data.experimentId.size() <= 96
                     && request.resource.data.participantId is string
                     && request.resource.data.participantId.size() <= 128;
 
-      // Session documents are written once, at the end, and never touched again.
-      allow read, update, delete: if false;
+      // A timed-out retry sends the same payload; only the server timestamp may differ.
+      allow update: if sameOwner()
+                    && request.resource.data.sessionId == sessionId
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['finishedAt']);
+
+      allow read, delete: if false;
 
       match /chunks/{chunkId} {
-
         allow create: if signedIn()
                       && ownedByCaller()
                       && request.resource.data.sessionId == sessionId
                       && request.resource.data.frames is list
-                      // A cheap ceiling on how much one document can hold.
-                      // Raise it only if you also raise chunkFrames in config.js.
                       && request.resource.data.frames.size() <= 2000;
 
-        allow read, update, delete: if false;
+        allow update: if sameOwner()
+                      && request.resource.data.sessionId == sessionId
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uploadedAt']);
+
+        allow read, delete: if false;
       }
 
       match /trialSummaries/{trialId} {
-
         allow create: if signedIn()
                       && ownedByCaller()
                       && request.resource.data.sessionId == sessionId
                       && request.resource.data.trialIndex is int;
 
-        allow read, update, delete: if false;
+        allow update: if sameOwner()
+                      && request.resource.data.sessionId == sessionId
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['savedAt']);
+
+        allow read, delete: if false;
+      }
+
+      match /postTaskSurvey/{surveyId} {
+        allow create: if signedIn()
+                      && ownedByCaller()
+                      && request.resource.data.sessionId == sessionId;
+
+        allow update: if sameOwner()
+                      && request.resource.data.sessionId == sessionId
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['savedAt']);
+
+        allow read, delete: if false;
       }
     }
 
-    // Anything not explicitly allowed above is denied.
     match /{document=**} {
       allow read, write: if false;
     }
