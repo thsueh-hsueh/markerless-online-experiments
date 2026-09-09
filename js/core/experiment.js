@@ -1,8 +1,8 @@
-/* experiment.js: V5.15 JT-flow runner.
+/* experiment.js: V5.16.4 JT-flow runner.
  *
  * You should not need to change this file to build a new experiment. It takes
  * an experiment definition (see experiments/_template.js) and walks the
- * participant through: consent -> essentials -> camera -> instructions -> trials -> save -> final questions -> Treasure Hunt result.
+ * participant through: consent -> essentials -> camera -> instructions -> trials -> core save -> bonus survey -> score.
  *
  * THE FRAME LOOP, in one paragraph:
  * Every time the browser paints (~60x per second), we check whether the webcam
@@ -13,7 +13,7 @@
  * disappearing. */
 
 import { STUDY, CONSENT, RECORDING, ACTIVE_EXPERIMENT } from "../../config.js";
-import { DEMOGRAPHIC_QUESTIONS, POST_TASK_QUESTIONS, POST_TASK_LIKERT_SCALE } from "../../questions.js";
+import { DEMOGRAPHIC_QUESTIONS, POST_TASK_QUESTIONS } from "../../questions.js";
 import { renderForm, readForm, focusField } from "./form.js";
 import { startCamera, stopCamera } from "./camera.js";
 import { createTracker } from "./tracker.js";
@@ -27,7 +27,7 @@ export async function main() {
 
   let exp;
   try {
-exp = (await import(`../../experiments/${name}.js?v=153`)).default;
+exp = (await import(`../../experiments/${name}.js?v=161`)).default;
   } catch (err) {
     return ui.fatal(
       `Could not load the experiment "${name}".`,
@@ -97,9 +97,9 @@ async function run(exp) {
   let demographics = {};
   if (!devMode && DEMOGRAPHIC_QUESTIONS.length) {
     configureQuestionScreen({
-      title: "About You",
-      subtitle: "",
-      buttonText: "Continue",
+      title: "A few quick questions",
+      subtitle: "This should take less than 30 seconds.",
+      buttonText: "Next",
     });
     demographics = await collectQuestionSet(DEMOGRAPHIC_QUESTIONS);
   }
@@ -236,11 +236,11 @@ async function run(exp) {
       trackerDelegate: trackerMeta.delegate,
       trackerErrors: trackerMeta.errorCount,
     },
-    runnerBuild: "v5.15.3-participant-flow-20260908",
+    runnerBuild: "v5.16.1-jt-flow-20260909",
     schemaVersion: 5,
   };
 
-  /* ---- 6. CORE SAVE before the final questions. Real progress; no fake countdown. */
+  /* ---- 6. CORE SAVE before the bonus survey. Real progress; no fake countdown. */
   if (saving) {
     ui.showScreen("screen-saving");
     ensureSavingProgressUi();
@@ -266,19 +266,19 @@ async function run(exp) {
     ui.downloadJson(`${sessionId}.json`, sessionDoc);
   }
 
-  /* ---- 7. Final participant questions. Core game data are already safe. */
+  /* ---- 7. Bonus post-task survey. Core game data are already safe. */
   let postTaskSurvey = null;
   let postTaskSurveySavePromise = null;
   if (exp.participantFlow?.postTaskSurvey && (!devMode || showPostInDev) && POST_TASK_QUESTIONS?.length) {
     configureQuestionScreen({
-      title: "Final Questions",
-      subtitle: "Please answer the questions below to see your Treasure Hunt score.",
-      buttonText: "See My Score",
+      title: "A few final questions",
+      subtitle: "Your game data have been saved. Complete these questions to see your score.",
+      buttonText: "Show my score",
     });
-    postTaskSurvey = await collectParticipantSurvey(POST_TASK_QUESTIONS, POST_TASK_LIKERT_SCALE);
+    postTaskSurvey = await collectQuestionSet(POST_TASK_QUESTIONS);
 
     if (saving) {
-      // Final survey upload starts immediately but never blocks the score screen.
+      // Bonus survey upload starts immediately but never blocks the score screen.
       postTaskSurveySavePromise = fb.savePostTaskSurvey(sessionId, {
         experimentId: exp.id,
         participantId: participant.participantId,
@@ -310,9 +310,6 @@ async function run(exp) {
     };
   }
 
-  if (exp.participantFlow?.showScore) {
-    prepareTreasureDoneScreen(score);
-  }
   ui.showScreen("screen-done");
   if (saving && STUDY.completionRedirectUrl) {
     ui.setText("#done-redirect-note", "Returning you to Prolific in 5 seconds...");
@@ -330,16 +327,15 @@ function configureQuestionScreen({ title, subtitle, buttonText }) {
   const h2 = screen.querySelector("h2");
   if (h2) h2.textContent = title;
 
-  let note = screen.querySelector("#v515-question-note");
+  let note = screen.querySelector("#v516-question-note");
   if (!note) {
     note = document.createElement("p");
-    note.id = "v515-question-note";
+    note.id = "v516-question-note";
     note.className = "subtle";
     const form = ui.$("#demographics-form");
     if (form) form.before(note);
   }
-  note.textContent = subtitle || "";
-  note.hidden = !subtitle;
+  note.textContent = subtitle;
 
   const button = ui.$("#btn-demographics");
   if (button) button.textContent = buttonText;
@@ -355,244 +351,6 @@ async function collectQuestionSet(questions) {
     if (ok) return values;
     focusField(formEl, firstError);
   }
-}
-
-/* Participant-facing, sectioned renderer for the longer post-task survey.
-   This is separate from renderForm() so the short pre-task page can stay simple
-   while the final survey gets clear section headings and compact Likert rows. */
-async function collectParticipantSurvey(questions, likertScale = {}) {
-  const formEl = ui.$("#demographics-form");
-  const button = ui.$("#btn-demographics");
-  ensureParticipantSurveyStyles();
-  formEl.innerHTML = "";
-  formEl.classList.add("v5151-final-survey");
-
-  let currentSection = null;
-  let sectionBody = null;
-
-  for (const q of questions) {
-    if (q.section !== currentSection) {
-      currentSection = q.section || "Questions";
-      const section = document.createElement("section");
-      section.className = "v5151-survey-section";
-      section.innerHTML = `<h3>${escapeHtml(currentSection)}</h3><div class="v5151-section-body"></div>`;
-      formEl.appendChild(section);
-      sectionBody = section.querySelector(".v5151-section-body");
-    }
-    sectionBody.appendChild(buildParticipantSurveyQuestion(q, likertScale));
-  }
-
-  const distractionSelect = formEl.querySelector('[name="distracted"]');
-  const distractionWrap = formEl.querySelector('[data-question-id="distractionDescription"]');
-  const syncDistraction = () => {
-    if (!distractionWrap || !distractionSelect) return;
-    const show = distractionSelect.value === "Yes" || distractionSelect.value === "Not sure";
-    distractionWrap.hidden = !show;
-    const input = distractionWrap.querySelector("textarea,input,select");
-    if (!show && input) input.value = "";
-  };
-  distractionSelect?.addEventListener("change", syncDistraction);
-  syncDistraction();
-
-  ui.showScreen("screen-demographics");
-
-  while (true) {
-    await ui.waitForClick("#btn-demographics");
-    const result = readParticipantSurvey(formEl, questions);
-    clearSurveyErrors(formEl);
-    if (result.ok) {
-      formEl.classList.remove("v5151-final-survey");
-      return result.values;
-    }
-
-    const first = formEl.querySelector(`[data-question-id="${cssEscape(result.firstError)}"]`);
-    if (first) {
-      first.classList.add("v5151-has-error");
-      first.scrollIntoView({ behavior: "smooth", block: "center" });
-      first.querySelector("input,select,textarea")?.focus({ preventScroll: true });
-    }
-  }
-}
-
-function buildParticipantSurveyQuestion(q, likertScale) {
-  const wrap = document.createElement("div");
-  wrap.className = `v5151-survey-question ${q.type === "likert" ? "v5151-likert-question" : ""}`;
-  wrap.dataset.questionId = q.id;
-
-  const label = document.createElement("div");
-  label.className = "v5151-question-label";
-  label.innerHTML = `${escapeHtml(q.label)}${q.required ? ' <span class="v5151-required">*</span>' : ""}`;
-  wrap.appendChild(label);
-
-  if (q.help) {
-    const help = document.createElement("div");
-    help.className = "v5151-question-help";
-    help.textContent = q.help;
-    wrap.appendChild(help);
-  }
-
-  if (q.type === "likert") {
-    const scale = document.createElement("div");
-    scale.className = "v5151-likert-scale";
-    for (let value = 1; value <= 5; value++) {
-      const option = document.createElement("label");
-      option.className = "v5151-likert-option";
-      option.innerHTML = `
-        <input type="radio" name="${escapeHtml(q.id)}" value="${value}">
-        <span class="v5151-likert-number">${value}</span>
-        <span class="v5151-likert-text">${escapeHtml(likertScale[value] || "")}</span>`;
-      scale.appendChild(option);
-    }
-    wrap.appendChild(scale);
-  } else if (q.type === "select") {
-    const select = document.createElement("select");
-    select.name = q.id;
-    select.innerHTML = `<option value="">Select an option</option>` +
-      (q.options || []).map((opt) => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`).join("");
-    wrap.appendChild(select);
-  } else if (q.type === "number") {
-    const input = document.createElement("input");
-    input.type = "number";
-    input.name = q.id;
-    if (Number.isFinite(q.min)) input.min = String(q.min);
-    if (Number.isFinite(q.max)) input.max = String(q.max);
-    if (q.placeholder) input.placeholder = q.placeholder;
-    input.step = "any";
-    wrap.appendChild(input);
-  } else if (q.type === "textarea") {
-    const textarea = document.createElement("textarea");
-    textarea.name = q.id;
-    textarea.rows = 3;
-    if (q.placeholder) textarea.placeholder = q.placeholder;
-    wrap.appendChild(textarea);
-  } else {
-    const input = document.createElement("input");
-    input.type = "text";
-    input.name = q.id;
-    if (q.placeholder) input.placeholder = q.placeholder;
-    wrap.appendChild(input);
-  }
-
-  const error = document.createElement("div");
-  error.className = "v5151-question-error";
-  error.textContent = "Please answer this question.";
-  wrap.appendChild(error);
-  return wrap;
-}
-
-function readParticipantSurvey(formEl, questions) {
-  const values = {};
-  let firstError = null;
-
-  for (const q of questions) {
-    const wrap = formEl.querySelector(`[data-question-id="${cssEscape(q.id)}"]`);
-    if (!wrap || wrap.hidden) {
-      values[q.id] = "";
-      continue;
-    }
-
-    let value = "";
-    if (q.type === "likert") {
-      const checked = wrap.querySelector(`input[name="${cssEscape(q.id)}"]:checked`);
-      value = checked ? Number(checked.value) : "";
-    } else {
-      const field = wrap.querySelector(`[name="${cssEscape(q.id)}"]`);
-      value = field?.value?.trim?.() ?? "";
-      if (q.type === "number" && value !== "") value = Number(value);
-    }
-
-    values[q.id] = value;
-
-    const missing = q.required && (value === "" || value == null);
-    const outOfRange = q.type === "number" && value !== "" && (
-      (Number.isFinite(q.min) && value < q.min) ||
-      (Number.isFinite(q.max) && value > q.max)
-    );
-
-    if ((missing || outOfRange) && firstError == null) firstError = q.id;
-  }
-
-  return { ok: firstError == null, values, firstError };
-}
-
-function clearSurveyErrors(formEl) {
-  formEl.querySelectorAll(".v5151-has-error").forEach((el) => el.classList.remove("v5151-has-error"));
-}
-
-function ensureParticipantSurveyStyles() {
-  if (document.getElementById("v5151-final-survey-style")) return;
-  const style = document.createElement("style");
-  style.id = "v5151-final-survey-style";
-  style.textContent = `
-    body:has(#screen-demographics.visible) main { max-width:920px; }
-    #screen-demographics > h2 { margin-bottom:4px; }
-    #v515-question-note:not([hidden]) { max-width:720px;margin:4px auto 18px;text-align:center;color:#aebed2; }
-    .v5151-final-survey { display:grid;gap:16px;margin-top:18px; }
-    .v5151-survey-section {
-      padding:18px 20px 20px;border-radius:20px;
-      background:rgba(14,31,60,.72);border:1px solid rgba(151,196,255,.14);
-      box-shadow:0 12px 30px rgba(0,0,0,.12);
-    }
-    .v5151-survey-section h3 {
-      margin:0 0 13px;color:#f2f7ff;font:850 1.18rem/1.2 system-ui,sans-serif;
-      letter-spacing:.01em;
-    }
-    .v5151-section-body { display:grid;gap:13px; }
-    .v5151-survey-question {
-      padding:13px 14px;border-radius:14px;background:rgba(255,255,255,.035);
-      border:1px solid rgba(190,217,255,.08);
-    }
-    .v5151-question-label { color:#edf4ff;font-weight:730;line-height:1.38; }
-    .v5151-question-help { margin:5px 0 8px;color:#aebed2;font-size:.9rem;line-height:1.4; }
-    .v5151-required { color:#ffcf77; }
-    .v5151-survey-question select,
-    .v5151-survey-question input[type="text"],
-    .v5151-survey-question input[type="number"],
-    .v5151-survey-question textarea {
-      width:100%;box-sizing:border-box;margin-top:9px;padding:10px 12px;border-radius:11px;
-      border:1px solid rgba(173,205,246,.22);background:#0b1a35;color:#f4f8ff;
-      font:600 .96rem/1.3 system-ui,sans-serif;
-    }
-    .v5151-survey-question textarea { resize:vertical;min-height:78px; }
-    .v5151-likert-scale { display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-top:10px; }
-    .v5151-likert-option {
-      min-height:78px;padding:9px 5px 8px;border-radius:11px;cursor:pointer;
-      display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:5px;
-      background:rgba(255,255,255,.035);border:1px solid rgba(173,205,246,.12);
-      color:#c9d8ec;text-align:center;
-    }
-    .v5151-likert-option:has(input:checked) {
-      background:rgba(94,146,233,.18);border-color:rgba(139,185,255,.58);
-      box-shadow:0 0 0 1px rgba(139,185,255,.16) inset;
-    }
-    .v5151-likert-option input { margin:0;accent-color:#8fb8ff; }
-    .v5151-likert-number { font-weight:900;color:#f0f6ff; }
-    .v5151-likert-text { font-size:.72rem;line-height:1.18; }
-    .v5151-question-error { display:none;margin-top:7px;color:#ffb5ad;font-size:.85rem;font-weight:700; }
-    .v5151-has-error { border-color:rgba(255,142,130,.60); }
-    .v5151-has-error .v5151-question-error { display:block; }
-    @media (max-width:720px) {
-      .v5151-survey-section { padding:15px 12px; }
-      .v5151-likert-scale { grid-template-columns:1fr; }
-      .v5151-likert-option { min-height:0;flex-direction:row;justify-content:flex-start;text-align:left;padding:9px 10px; }
-      .v5151-likert-text { font-size:.86rem; }
-    }
-  `;
-  document.head.appendChild(style);
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function cssEscape(value) {
-  if (window.CSS?.escape) return CSS.escape(String(value));
-  return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
 
 async function runComprehensionIfNeeded(exp, video, tracker) {
@@ -662,30 +420,78 @@ function looksLikeFist(landmarks) {
 async function waitForFistOrClick(video, tracker, buttonSelector) {
   const button = ui.$(buttonSelector);
   if (!button) return;
-  button.textContent = "Or click here to start";
+  button.textContent = "Start with a click instead";
+
+  const MIN_READ_MS = 6000;
+  const OPEN_HAND_ARM_MS = 1000;
+  const FIST_HOLD_MS = 1200;
+  const shownAt = performance.now();
 
   let done = false;
   const onClick = () => { done = true; };
   button.addEventListener("click", onClick);
 
   let fistSince = null;
+  let openHandSince = null;
+  let gestureArmed = false;
   let lastVideoTime = -1;
-  const hint = document.getElementById("treasure-gesture-start-status");
+  const title = document.getElementById("treasure-gesture-start-title");
+  const hint =
+    document.getElementById("treasure-gesture-start-status") ||
+    document.getElementById("treasure-gesture-start-hint");
+  const gestureIcon = document.getElementById("treasure-gesture-start-icon");
+  const setGesturePrompt = (headline, detail, iconState = null) => {
+    if (title) title.textContent = headline;
+    if (hint) hint.textContent = detail;
+    if (gestureIcon && iconState) {
+      const src = iconState === "read" ? gestureIcon.dataset.readSrc
+        : iconState === "open" ? gestureIcon.dataset.openSrc
+        : gestureIcon.dataset.fistSrc;
+      if (src && gestureIcon.getAttribute("src") !== src) gestureIcon.setAttribute("src", src);
+    }
+  };
 
   try {
     while (!done) {
       if (video.currentTime !== lastVideoTime) {
         lastVideoTime = video.currentTime;
-        const res = tracker.track(video, performance.now());
-        const fist = (res.landmarks ?? []).some(looksLikeFist);
-        if (fist) {
-          if (fistSince == null) fistSince = performance.now();
-          const held = performance.now() - fistSince;
-          if (hint) hint.textContent = held >= 250 ? "Keep holding…" : "Fist detected";
-          if (held >= 650) done = true;
+        const now = performance.now();
+        const res = tracker.track(video, now);
+        const hands = res.landmarks ?? [];
+        const anyHand = hands.length > 0;
+        const fist = hands.some(looksLikeFist);
+        const readElapsed = now - shownAt;
+
+        if (readElapsed < MIN_READ_MS) {
+          /* Do not arm the gesture during the reading window. A pre-existing fist
+             or a single noisy open-hand frame cannot advance the page. */
+          fistSince = null;
+          openHandSince = null;
+          gestureArmed = false;
+          setGesturePrompt("READ THE 3 STEPS ABOVE", `Please read before starting · ${Math.ceil((MIN_READ_MS-readElapsed)/1000)}s`, "read");
+        } else if (!gestureArmed) {
+          fistSince = null;
+          if (anyHand && !fist) {
+            if (openHandSince == null) openHandSince = now;
+            const openHeld = now - openHandSince;
+            setGesturePrompt("OPEN YOUR HAND FIRST", openHeld >= 250 ? "Keep it open for a moment..." : "Hold your hand open for a moment.", "open");
+            if (openHeld >= OPEN_HAND_ARM_MS) {
+              gestureArmed = true;
+              openHandSince = null;
+              setGesturePrompt("MAKE A FIST TO BEGIN", "Close your hand and hold.", "fist");
+            }
+          } else {
+            openHandSince = null;
+            setGesturePrompt("OPEN YOUR HAND FIRST", "Hold your hand open for a moment.", "open");
+          }
+        } else if (fist) {
+          if (fistSince == null) fistSince = now;
+          const held = now - fistSince;
+          setGesturePrompt("HOLD YOUR FIST", held >= 250 ? "Keep holding..." : "Fist detected.", "fist");
+          if (held >= FIST_HOLD_MS) done = true;
         } else {
           fistSince = null;
-          if (hint) hint.textContent = "";
+          setGesturePrompt("MAKE A FIST TO BEGIN", "Close your hand and hold.", "fist");
         }
       }
       await nextFrame();
@@ -697,15 +503,15 @@ async function waitForFistOrClick(video, tracker, buttonSelector) {
 
 function ensureSavingProgressUi() {
   const screen = ui.$("#screen-saving");
-  if (!screen || document.getElementById("v515-saving-progress")) return;
+  if (!screen || document.getElementById("v516-saving-progress")) return;
   const shell = document.createElement("div");
-  shell.id = "v515-saving-progress";
+  shell.id = "v516-saving-progress";
   shell.style.cssText = "width:min(520px,86vw);margin:18px auto 0;text-align:left;";
   shell.innerHTML = `
     <div style="height:14px;border-radius:999px;background:rgba(255,255,255,.11);overflow:hidden;border:1px solid rgba(255,255,255,.08);">
-      <div id="v515-saving-bar" style="height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,#77a9ff,#98d9ff);transition:width .22s ease;"></div>
+      <div id="v516-saving-bar" style="height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,#77a9ff,#98d9ff);transition:width .22s ease;"></div>
     </div>
-    <div id="v515-saving-percent" style="margin-top:8px;text-align:center;font-weight:800;">0%</div>`;
+    <div id="v516-saving-percent" style="margin-top:8px;text-align:center;font-weight:800;">0%</div>`;
   const savingText = ui.$("#saving-text");
   (savingText || screen.lastElementChild)?.after(shell);
 }
@@ -713,8 +519,8 @@ function ensureSavingProgressUi() {
 function updateSavingProgress(progress, message) {
   ensureSavingProgressUi();
   const pct = Math.max(0, Math.min(100, Math.round(progress * 100)));
-  const bar = document.getElementById("v515-saving-bar");
-  const label = document.getElementById("v515-saving-percent");
+  const bar = document.getElementById("v516-saving-bar");
+  const label = document.getElementById("v516-saving-percent");
   if (bar) bar.style.width = `${pct}%`;
   if (label) label.textContent = `${pct}%`;
   if (message) ui.setText("#saving-text", message);
@@ -800,81 +606,11 @@ function scoreCard(score) {
   const total = Math.max(0, score.total || 0);
   const hits = Math.max(0, score.hits || 0);
   return `
-    <div class="v5151-treasure-result">
-      <div class="v5151-result-sparkles" aria-hidden="true">
-        <span>✦</span><span>✧</span><span>✦</span><span>✧</span>
-      </div>
-      <svg class="v5151-result-chest" viewBox="0 0 220 150" aria-hidden="true">
-        <defs>
-          <linearGradient id="v5151ResultChestBody" x1="0" y1="0" x2="1" y2="1">
-            <stop stop-color="#c97830"/><stop offset=".58" stop-color="#8b4922"/><stop offset="1" stop-color="#4d2918"/>
-          </linearGradient>
-          <linearGradient id="v5151ResultChestLid" x1="0" y1="0" x2="0" y2="1">
-            <stop stop-color="#e8a34f"/><stop offset="1" stop-color="#7b3d1e"/>
-          </linearGradient>
-          <linearGradient id="v5151ResultGem" x1="0" y1="0" x2="1" y2="1">
-            <stop stop-color="#eef8ff"/><stop offset=".45" stop-color="#77b4ff"/><stop offset="1" stop-color="#5a4ac8"/>
-          </linearGradient>
-        </defs>
-        <g class="v5151-open-lid">
-          <path d="M51 69 Q63 24 110 24 Q157 24 169 69 Z" fill="url(#v5151ResultChestLid)" stroke="#efc56b" stroke-width="5"/>
-          <path d="M76 36V70M144 36V70" stroke="#e8bd62" stroke-width="6"/>
-        </g>
-        <g class="v5151-gem-pop">
-          <path d="M91 61 L110 45 L129 61 L122 89 L98 89 Z" fill="url(#v5151ResultGem)" stroke="#f4f9ff" stroke-width="4"/>
-        </g>
-        <rect x="45" y="72" width="130" height="60" rx="10" fill="url(#v5151ResultChestBody)" stroke="#efc56b" stroke-width="5"/>
-        <path d="M75 73V132M145 73V132" stroke="#e8bd62" stroke-width="6"/>
-        <rect x="99" y="90" width="22" height="20" rx="4" fill="#ffe49a" stroke="#9c6824" stroke-width="3"/>
-      </svg>
-      <div class="v5151-result-kicker">YOUR TREASURE HAUL</div>
-      <div class="v5151-result-score">${hits} <span>of</span> ${total}</div>
-      <div class="v5151-result-message">You collected ${hits} of ${total} gems!</div>
+    <div style="max-width:520px;margin:18px auto;padding:26px 22px;border-radius:24px;text-align:center;background:linear-gradient(180deg,rgba(25,55,104,.95),rgba(8,24,53,.96));border:1px solid rgba(143,190,255,.20);box-shadow:0 18px 50px rgba(0,0,0,.22);">
+      <div style="font-size:1rem;font-weight:800;color:#bcd1ed;letter-spacing:.06em;">YOUR SCORE</div>
+      <div style="font-size:3.1rem;font-weight:950;color:#f5f9ff;margin:5px 0 3px;">${hits} / ${total}</div>
+      <div style="font-weight:750;color:#9fc8ff;">gems reached</div>
     </div>`;
-}
-
-function prepareTreasureDoneScreen(score) {
-  ensureTreasureDoneStyles();
-  const screen = ui.$("#screen-done");
-  const title = screen?.querySelector("h2");
-  if (title) title.textContent = "TREASURE HUNT COMPLETE!";
-
-  const subtle = screen?.querySelector("p.subtle");
-  if (subtle && /session|saved|complete|done/i.test(subtle.textContent || "")) {
-    subtle.textContent = "Thanks for playing!";
-  }
-}
-
-function ensureTreasureDoneStyles() {
-  if (document.getElementById("v5151-treasure-done-style")) return;
-  const style = document.createElement("style");
-  style.id = "v5151-treasure-done-style";
-  style.textContent = `
-    body:has(#screen-done.visible) main { max-width:760px; }
-    #screen-done { text-align:center; }
-    #screen-done > h2 { font-size:clamp(2rem,5vw,3rem);margin-bottom:5px;letter-spacing:.015em; }
-    .v5151-treasure-result {
-      position:relative;overflow:hidden;max-width:560px;margin:16px auto 18px;padding:24px 24px 26px;
-      border-radius:26px;background:radial-gradient(circle at 50% 20%,#1b3b72 0,#0d1f43 48%,#08152e 100%);
-      border:1px solid rgba(151,196,255,.16);box-shadow:0 22px 60px rgba(0,0,0,.28);
-    }
-    .v5151-result-chest { width:min(230px,56vw);height:auto;filter:drop-shadow(0 14px 20px rgba(0,0,0,.28)); }
-    .v5151-open-lid { transform-origin:110px 69px;animation:v5151LidOpen .75s cubic-bezier(.2,.8,.2,1) both; }
-    .v5151-gem-pop { transform-origin:110px 75px;animation:v5151GemPop 1.4s .35s ease-out both; }
-    .v5151-result-kicker { margin-top:2px;color:#a9c7ef;font-weight:850;letter-spacing:.08em;font-size:.86rem; }
-    .v5151-result-score { margin:4px 0 1px;color:#f7fbff;font:950 clamp(2.7rem,7vw,4rem)/1 system-ui,sans-serif; }
-    .v5151-result-score span { font-size:.38em;color:#9fb8d8;font-weight:750;vertical-align:middle; }
-    .v5151-result-message { margin-top:7px;color:#dceaff;font-weight:780;font-size:1.08rem; }
-    .v5151-result-sparkles span { position:absolute;color:#dceeff;text-shadow:0 0 12px rgba(143,190,255,.9);animation:v5151Sparkle 1.8s ease-in-out infinite; }
-    .v5151-result-sparkles span:nth-child(1){left:17%;top:21%;font-size:1.4rem}
-    .v5151-result-sparkles span:nth-child(2){right:18%;top:26%;font-size:1.1rem;animation-delay:.35s}
-    .v5151-result-sparkles span:nth-child(3){left:26%;top:43%;font-size:.9rem;animation-delay:.7s}
-    .v5151-result-sparkles span:nth-child(4){right:26%;top:45%;font-size:1rem;animation-delay:1s}
-    @keyframes v5151LidOpen { from{transform:translateY(20px) rotate(0deg);opacity:.7} to{transform:translateY(0) rotate(0deg);opacity:1} }
-    @keyframes v5151GemPop { 0%{transform:translateY(28px) scale(.55);opacity:0} 55%{transform:translateY(-10px) scale(1.12);opacity:1} 100%{transform:translateY(0) scale(1);opacity:1} }
-    @keyframes v5151Sparkle { 0%,100%{opacity:.25;transform:scale(.85)} 50%{opacity:1;transform:scale(1.2)} }
-  `;
-  document.head.appendChild(style);
 }
 
 /* -------------------------------------------------------------------------
@@ -908,6 +644,50 @@ async function collectConsent(statements) {
 }
 
 /* -------------------------------------------------------------------------
+ * Retina/high-DPI overlay support. The canvas keeps CSS-pixel logical
+ * coordinates while its backing store is enlarged for sharper vector art.
+ * The backing store is capped near 2.1 MP to avoid unnecessary per-frame cost.
+ * ---------------------------------------------------------------------- */
+function syncOverlayResolution(canvas, video = null) {
+  const rect = canvas.getBoundingClientRect();
+  const fallbackW = Math.max(1, video?.videoWidth || canvas.__logicalWidth || canvas.width || 640);
+  const fallbackH = Math.max(1, video?.videoHeight || canvas.__logicalHeight || canvas.height || 480);
+  const aspect = fallbackW / fallbackH;
+
+  const logicalW = Math.max(1, Math.round(rect.width || fallbackW));
+  const logicalH = Math.max(1, Math.round(rect.height || (logicalW / aspect)));
+
+  const desiredDpr = Math.min(2, Math.max(1, window.devicePixelRatio || 1));
+  let backingW = Math.max(1, Math.round(logicalW * desiredDpr));
+  let backingH = Math.max(1, Math.round(logicalH * desiredDpr));
+
+  const MAX_BACKING_PIXELS = 2073600;
+  const pixelCount = backingW * backingH;
+  if (pixelCount > MAX_BACKING_PIXELS) {
+    const s = Math.sqrt(MAX_BACKING_PIXELS / pixelCount);
+    backingW = Math.max(1, Math.round(backingW * s));
+    backingH = Math.max(1, Math.round(backingH * s));
+  }
+
+  if (canvas.width !== backingW || canvas.height !== backingH) {
+    canvas.width = backingW;
+    canvas.height = backingH;
+  }
+
+  canvas.__logicalWidth = logicalW;
+  canvas.__logicalHeight = logicalH;
+  canvas.__renderScaleX = backingW / logicalW;
+  canvas.__renderScaleY = backingH / logicalH;
+}
+
+function prepareOverlayContext(ctx, canvas, video = null, clear = true) {
+  syncOverlayResolution(canvas, video);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (clear) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.setTransform(canvas.__renderScaleX || 1, 0, 0, canvas.__renderScaleY || 1, 0, 0);
+}
+
+/* -------------------------------------------------------------------------
  * The positioning preview: run the tracker live until the participant has been
  * visible for a couple of continuous seconds, then let them continue.
  * ---------------------------------------------------------------------- */
@@ -925,6 +705,7 @@ async function positioningLoop(video, tracker, ctx, canvas, stage) {
     if (video.currentTime !== lastVideoTime) {
       lastVideoTime = video.currentTime;
       const res = tracker.track(video, performance.now());
+      prepareOverlayContext(ctx, canvas, video, true);
       drawLandmarks(ctx, canvas, res.landmarks[0]);
 
       const seen = res.landmarks.length > 0;
@@ -1022,7 +803,7 @@ const derived = exp.onFrame?.({
   }
 );
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      prepareOverlayContext(ctx, canvas, video, true);
       if (exp.draw) {
         exp.draw(ctx, {
 
@@ -1070,9 +851,10 @@ const HAND_BONES = [
 ];
 
 export function drawLandmarks(ctx, canvas, landmarks, color = "#4ade80") {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const W = canvas.__logicalWidth ?? canvas.clientWidth ?? canvas.width;
+  const H = canvas.__logicalHeight ?? canvas.clientHeight ?? canvas.height;
+  ctx.clearRect(0, 0, W, H);
   if (!landmarks) return;
-  const W = canvas.width, H = canvas.height;
 
   ctx.strokeStyle = color;
   ctx.lineWidth = 3;
