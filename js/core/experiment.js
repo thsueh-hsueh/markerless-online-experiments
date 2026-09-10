@@ -238,7 +238,7 @@ async function run(exp) {
       trackerDelegate: trackerMeta.delegate,
       trackerErrors: trackerMeta.errorCount,
     },
-    runnerBuild: "v5.17-final-likert-english-20260910",
+    runnerBuild: "v5.17-final-likert-themed-ending-20260910",
     schemaVersion: 5,
   };
 
@@ -310,6 +310,10 @@ async function run(exp) {
       copy.trials.forEach((t, i) => { t.frames = demoFrames[i] ?? []; });
       ui.downloadJson(`${sessionId}.json`, copy);
     };
+  }
+
+  if (exp.participantFlow?.showScore) {
+    prepareTreasureDoneScreen(score);
   }
 
   ui.showScreen("screen-done");
@@ -843,11 +847,81 @@ function scoreCard(score) {
   const total = Math.max(0, score.total || 0);
   const hits = Math.max(0, score.hits || 0);
   return `
-    <div style="max-width:520px;margin:18px auto;padding:26px 22px;border-radius:24px;text-align:center;background:linear-gradient(180deg,rgba(25,55,104,.95),rgba(8,24,53,.96));border:1px solid rgba(143,190,255,.20);box-shadow:0 18px 50px rgba(0,0,0,.22);">
-      <div style="font-size:1rem;font-weight:800;color:#bcd1ed;letter-spacing:.06em;">YOUR SCORE</div>
-      <div style="font-size:3.1rem;font-weight:950;color:#f5f9ff;margin:5px 0 3px;">${hits} / ${total}</div>
-      <div style="font-weight:750;color:#9fc8ff;">gems reached</div>
+    <div class="v5151-treasure-result">
+      <div class="v5151-result-sparkles" aria-hidden="true">
+        <span>✦</span><span>✧</span><span>✦</span><span>✧</span>
+      </div>
+      <svg class="v5151-result-chest" viewBox="0 0 220 150" aria-hidden="true">
+        <defs>
+          <linearGradient id="v5151ResultChestBody" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#c97830"/><stop offset=".58" stop-color="#8b4922"/><stop offset="1" stop-color="#4d2918"/>
+          </linearGradient>
+          <linearGradient id="v5151ResultChestLid" x1="0" y1="0" x2="0" y2="1">
+            <stop stop-color="#e8a34f"/><stop offset="1" stop-color="#7b3d1e"/>
+          </linearGradient>
+          <linearGradient id="v5151ResultGem" x1="0" y1="0" x2="1" y2="1">
+            <stop stop-color="#eef8ff"/><stop offset=".45" stop-color="#77b4ff"/><stop offset="1" stop-color="#5a4ac8"/>
+          </linearGradient>
+        </defs>
+        <g class="v5151-open-lid">
+          <path d="M51 69 Q63 24 110 24 Q157 24 169 69 Z" fill="url(#v5151ResultChestLid)" stroke="#efc56b" stroke-width="5"/>
+          <path d="M76 36V70M144 36V70" stroke="#e8bd62" stroke-width="6"/>
+        </g>
+        <g class="v5151-gem-pop">
+          <path d="M91 61 L110 45 L129 61 L122 89 L98 89 Z" fill="url(#v5151ResultGem)" stroke="#f4f9ff" stroke-width="4"/>
+        </g>
+        <rect x="45" y="72" width="130" height="60" rx="10" fill="url(#v5151ResultChestBody)" stroke="#efc56b" stroke-width="5"/>
+        <path d="M75 73V132M145 73V132" stroke="#e8bd62" stroke-width="6"/>
+        <rect x="99" y="90" width="22" height="20" rx="4" fill="#ffe49a" stroke="#9c6824" stroke-width="3"/>
+      </svg>
+      <div class="v5151-result-kicker">YOUR TREASURE HAUL</div>
+      <div class="v5151-result-score">${hits} <span>of</span> ${total}</div>
+      <div class="v5151-result-message">You collected ${hits} of ${total} gems!</div>
     </div>`;
+}
+
+function prepareTreasureDoneScreen(score) {
+  ensureTreasureDoneStyles();
+  const screen = ui.$("#screen-done");
+  const title = screen?.querySelector("h2");
+  if (title) title.textContent = "TREASURE HUNT COMPLETE!";
+
+  const subtle = screen?.querySelector("p.subtle");
+  if (subtle && /session|saved|complete|done/i.test(subtle.textContent || "")) {
+    subtle.textContent = "Thanks for playing!";
+  }
+}
+
+function ensureTreasureDoneStyles() {
+  if (document.getElementById("v5151-treasure-done-style")) return;
+  const style = document.createElement("style");
+  style.id = "v5151-treasure-done-style";
+  style.textContent = `
+    body:has(#screen-done.visible) main { max-width:760px; }
+    #screen-done { text-align:center; }
+    #screen-done > h2 { font-size:clamp(2rem,5vw,3rem);margin-bottom:5px;letter-spacing:.015em; }
+    .v5151-treasure-result {
+      position:relative;overflow:hidden;max-width:560px;margin:16px auto 18px;padding:24px 24px 26px;
+      border-radius:26px;background:radial-gradient(circle at 50% 20%,#1b3b72 0,#0d1f43 48%,#08152e 100%);
+      border:1px solid rgba(151,196,255,.16);box-shadow:0 22px 60px rgba(0,0,0,.28);
+    }
+    .v5151-result-chest { width:min(230px,56vw);height:auto;filter:drop-shadow(0 14px 20px rgba(0,0,0,.28)); }
+    .v5151-open-lid { transform-origin:110px 69px;animation:v5151LidOpen .75s cubic-bezier(.2,.8,.2,1) both; }
+    .v5151-gem-pop { transform-origin:110px 75px;animation:v5151GemPop 1.4s .35s ease-out both; }
+    .v5151-result-kicker { margin-top:2px;color:#a9c7ef;font-weight:850;letter-spacing:.08em;font-size:.86rem; }
+    .v5151-result-score { margin:4px 0 1px;color:#f7fbff;font:950 clamp(2.7rem,7vw,4rem)/1 system-ui,sans-serif; }
+    .v5151-result-score span { font-size:.38em;color:#9fb8d8;font-weight:750;vertical-align:middle; }
+    .v5151-result-message { margin-top:7px;color:#dceaff;font-weight:780;font-size:1.08rem; }
+    .v5151-result-sparkles span { position:absolute;color:#dceeff;text-shadow:0 0 12px rgba(143,190,255,.9);animation:v5151Sparkle 1.8s ease-in-out infinite; }
+    .v5151-result-sparkles span:nth-child(1){left:17%;top:21%;font-size:1.4rem}
+    .v5151-result-sparkles span:nth-child(2){right:18%;top:26%;font-size:1.1rem;animation-delay:.35s}
+    .v5151-result-sparkles span:nth-child(3){left:26%;top:43%;font-size:.9rem;animation-delay:.7s}
+    .v5151-result-sparkles span:nth-child(4){right:26%;top:45%;font-size:1rem;animation-delay:1s}
+    @keyframes v5151LidOpen { from{transform:translateY(20px) rotate(0deg);opacity:.7} to{transform:translateY(0) rotate(0deg);opacity:1} }
+    @keyframes v5151GemPop { 0%{transform:translateY(28px) scale(.55);opacity:0} 55%{transform:translateY(-10px) scale(1.12);opacity:1} 100%{transform:translateY(0) scale(1);opacity:1} }
+    @keyframes v5151Sparkle { 0%,100%{opacity:.25;transform:scale(.85)} 50%{opacity:1;transform:scale(1.2)} }
+  `;
+  document.head.appendChild(style);
 }
 
 /* -------------------------------------------------------------------------
