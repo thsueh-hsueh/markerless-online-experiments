@@ -1,4 +1,4 @@
-/* experiment.js: V5.16.4 JT-flow runner.
+﻿/* experiment.js: V5.16.4 JT-flow runner.
  *
  * You should not need to change this file to build a new experiment. It takes
  * an experiment definition (see experiments/_template.js) and walks the
@@ -13,7 +13,7 @@
  * disappearing. */
 
 import { STUDY, CONSENT, RECORDING, ACTIVE_EXPERIMENT } from "../../config.js";
-import { DEMOGRAPHIC_QUESTIONS, POST_TASK_QUESTIONS } from "../../questions.js";
+import { DEMOGRAPHIC_QUESTIONS, POST_TASK_QUESTIONS, POST_TASK_LIKERT_SCALE } from "../../questions.js";
 import { renderForm, readForm, focusField } from "./form.js";
 import { startCamera, stopCamera } from "./camera.js";
 import { createTracker } from "./tracker.js";
@@ -236,7 +236,7 @@ async function run(exp) {
       trackerDelegate: trackerMeta.delegate,
       trackerErrors: trackerMeta.errorCount,
     },
-    runnerBuild: "v5.16.1-jt-flow-20260909",
+    runnerBuild: "v5.17-likert-survey-restored-20260910",
     schemaVersion: 5,
   };
 
@@ -248,7 +248,7 @@ async function run(exp) {
     updateSavingProgress(uploadManager.progress(), "Saving your game data...");
 
     let slowTimer = setTimeout(() => {
-      updateSavingProgress(uploadManager.progress(), "Still saving — your connection is taking longer than usual. Please keep this page open.");
+      updateSavingProgress(uploadManager.progress(), "Still saving ??your connection is taking longer than usual. Please keep this page open.");
     }, 15000);
 
     try {
@@ -275,7 +275,7 @@ async function run(exp) {
       subtitle: "Your game data have been saved. Complete these questions to see your score.",
       buttonText: "Show my score",
     });
-    postTaskSurvey = await collectQuestionSet(POST_TASK_QUESTIONS);
+    postTaskSurvey = await collectParticipantSurvey(POST_TASK_QUESTIONS, POST_TASK_LIKERT_SCALE);
 
     if (saving) {
       // Bonus survey upload starts immediately but never blocks the score screen.
@@ -352,6 +352,261 @@ async function collectQuestionSet(questions) {
     focusField(formEl, firstError);
   }
 }
+
+
+/* ============================================================
+ * RESTORED SECTIONED POST-TASK SURVEY / 1–5 LIKERT RENDERER
+ * Restored from the V5.15.1 participant-flow runner.
+ * ============================================================ */
+
+async function collectParticipantSurvey(questions, likertScale = {}) {
+  const formEl = ui.$("#demographics-form");
+  ensureParticipantSurveyStyles();
+  formEl.innerHTML = "";
+  formEl.classList.add("v5151-final-survey");
+
+  let currentSection = null;
+  let sectionBody = null;
+
+  for (const q of questions) {
+    if (q.section !== currentSection) {
+      currentSection = q.section || "Questions";
+      const section = document.createElement("section");
+      section.className = "v5151-survey-section";
+      section.innerHTML = `<h3>${escapeHtml(currentSection)}</h3><div class="v5151-section-body"></div>`;
+      formEl.appendChild(section);
+      sectionBody = section.querySelector(".v5151-section-body");
+    }
+    sectionBody.appendChild(buildParticipantSurveyQuestion(q, likertScale));
+  }
+
+  const distractionSelect = formEl.querySelector('[name="distracted"]');
+  const distractionWrap = formEl.querySelector('[data-question-id="distractionDescription"]');
+  const syncDistraction = () => {
+    if (!distractionWrap || !distractionSelect) return;
+    const show = distractionSelect.value === "Yes" || distractionSelect.value === "Not sure";
+    distractionWrap.hidden = !show;
+    const input = distractionWrap.querySelector("textarea,input,select");
+    if (!show && input) input.value = "";
+  };
+  distractionSelect?.addEventListener("change", syncDistraction);
+  syncDistraction();
+
+  ui.showScreen("screen-demographics");
+
+  while (true) {
+    await ui.waitForClick("#btn-demographics");
+    const result = readParticipantSurvey(formEl, questions);
+    clearSurveyErrors(formEl);
+
+    if (result.ok) {
+      formEl.classList.remove("v5151-final-survey");
+      return result.values;
+    }
+
+    const first = formEl.querySelector(`[data-question-id="${cssEscape(result.firstError)}"]`);
+    if (first) {
+      first.classList.add("v5151-has-error");
+      first.scrollIntoView({ behavior: "smooth", block: "center" });
+      first.querySelector("input,select,textarea")?.focus({ preventScroll: true });
+    }
+  }
+}
+
+function buildParticipantSurveyQuestion(q, likertScale) {
+  const wrap = document.createElement("div");
+  wrap.className = `v5151-survey-question ${q.type === "likert" ? "v5151-likert-question" : ""}`;
+  wrap.dataset.questionId = q.id;
+
+  const label = document.createElement("div");
+  label.className = "v5151-question-label";
+  label.innerHTML = `${escapeHtml(q.label)}${q.required ? ' <span class="v5151-required">*</span>' : ""}`;
+  wrap.appendChild(label);
+
+  if (q.help) {
+    const help = document.createElement("div");
+    help.className = "v5151-question-help";
+    help.textContent = q.help;
+    wrap.appendChild(help);
+  }
+
+  if (q.type === "likert") {
+    const scale = document.createElement("div");
+    scale.className = "v5151-likert-scale";
+    for (let value = 1; value <= 5; value++) {
+      const option = document.createElement("label");
+      option.className = "v5151-likert-option";
+      option.innerHTML = `
+        <input type="radio" name="${escapeHtml(q.id)}" value="${value}">
+        <span class="v5151-likert-number">${value}</span>
+        <span class="v5151-likert-text">${escapeHtml(likertScale[value] || "")}</span>`;
+      scale.appendChild(option);
+    }
+    wrap.appendChild(scale);
+  } else if (q.type === "select") {
+    const select = document.createElement("select");
+    select.name = q.id;
+    select.innerHTML = `<option value="">Select an option</option>` +
+      (q.options || []).map((opt) => `<option value="${escapeHtml(opt)}">${escapeHtml(opt)}</option>`).join("");
+    wrap.appendChild(select);
+  } else if (q.type === "number") {
+    const input = document.createElement("input");
+    input.type = "number";
+    input.name = q.id;
+    if (Number.isFinite(q.min)) input.min = String(q.min);
+    if (Number.isFinite(q.max)) input.max = String(q.max);
+    if (q.placeholder) input.placeholder = q.placeholder;
+    input.step = "any";
+    wrap.appendChild(input);
+  } else if (q.type === "textarea") {
+    const textarea = document.createElement("textarea");
+    textarea.name = q.id;
+    textarea.rows = 3;
+    if (q.placeholder) textarea.placeholder = q.placeholder;
+    wrap.appendChild(textarea);
+  } else {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.name = q.id;
+    if (q.placeholder) input.placeholder = q.placeholder;
+    wrap.appendChild(input);
+  }
+
+  const error = document.createElement("div");
+  error.className = "v5151-question-error";
+  error.textContent = "Please answer this question.";
+  wrap.appendChild(error);
+  return wrap;
+}
+
+function readParticipantSurvey(formEl, questions) {
+  const values = {};
+  let firstError = null;
+
+  for (const q of questions) {
+    const wrap = formEl.querySelector(`[data-question-id="${cssEscape(q.id)}"]`);
+    if (!wrap || wrap.hidden) {
+      values[q.id] = "";
+      continue;
+    }
+
+    let value = "";
+    if (q.type === "likert") {
+      const checked = wrap.querySelector(`input[name="${cssEscape(q.id)}"]:checked`);
+      value = checked ? Number(checked.value) : "";
+    } else {
+      const field = wrap.querySelector(`[name="${cssEscape(q.id)}"]`);
+      value = field?.value?.trim?.() ?? "";
+      if (q.type === "number" && value !== "") value = Number(value);
+    }
+
+    values[q.id] = value;
+
+    const missing = q.required && (value === "" || value == null);
+    const outOfRange = q.type === "number" && value !== "" && (
+      (Number.isFinite(q.min) && value < q.min) ||
+      (Number.isFinite(q.max) && value > q.max)
+    );
+
+    if ((missing || outOfRange) && firstError == null) firstError = q.id;
+  }
+
+  return { ok: firstError == null, values, firstError };
+}
+
+function clearSurveyErrors(formEl) {
+  formEl.querySelectorAll(".v5151-has-error").forEach((el) => el.classList.remove("v5151-has-error"));
+}
+
+function ensureParticipantSurveyStyles() {
+  if (document.getElementById("v5151-final-survey-style")) return;
+
+  const style = document.createElement("style");
+  style.id = "v5151-final-survey-style";
+  style.textContent = `
+    body:has(#screen-demographics.visible) main { max-width:920px; }
+    #screen-demographics > h2 { margin-bottom:4px; }
+    #v516-question-note:not([hidden]) { max-width:720px;margin:4px auto 18px;text-align:center;color:#aebed2; }
+
+    .v5151-final-survey { display:grid;gap:16px;margin-top:18px; }
+    .v5151-survey-section {
+      padding:18px 20px 20px;border-radius:20px;
+      background:rgba(14,31,60,.72);border:1px solid rgba(151,196,255,.14);
+      box-shadow:0 12px 30px rgba(0,0,0,.12);
+    }
+    .v5151-survey-section h3 {
+      margin:0 0 13px;color:#f2f7ff;font:850 1.18rem/1.2 system-ui,sans-serif;
+      letter-spacing:.01em;
+    }
+    .v5151-section-body { display:grid;gap:13px; }
+    .v5151-survey-question {
+      padding:13px 14px;border-radius:14px;background:rgba(255,255,255,.035);
+      border:1px solid rgba(190,217,255,.08);
+    }
+    .v5151-question-label { color:#edf4ff;font-weight:730;line-height:1.38; }
+    .v5151-question-help { margin:5px 0 8px;color:#aebed2;font-size:.9rem;line-height:1.4; }
+    .v5151-required { color:#ffcf77; }
+
+    .v5151-survey-question select,
+    .v5151-survey-question input[type="text"],
+    .v5151-survey-question input[type="number"],
+    .v5151-survey-question textarea {
+      width:100%;box-sizing:border-box;margin-top:9px;padding:10px 12px;border-radius:11px;
+      border:1px solid rgba(173,205,246,.22);background:#0b1a35;color:#f4f8ff;
+      font:600 .96rem/1.3 system-ui,sans-serif;
+    }
+
+    .v5151-survey-question textarea { resize:vertical;min-height:78px; }
+
+    .v5151-likert-scale {
+      display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-top:10px;
+    }
+    .v5151-likert-option {
+      min-height:78px;padding:9px 5px 8px;border-radius:11px;cursor:pointer;
+      display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:5px;
+      background:rgba(255,255,255,.035);border:1px solid rgba(173,205,246,.12);
+      color:#c9d8ec;text-align:center;
+    }
+    .v5151-likert-option:has(input:checked) {
+      background:rgba(94,146,233,.18);border-color:rgba(139,185,255,.58);
+      box-shadow:0 0 0 1px rgba(139,185,255,.16) inset;
+    }
+    .v5151-likert-option input { margin:0;accent-color:#8fb8ff; }
+    .v5151-likert-number { font-weight:900;color:#f0f6ff; }
+    .v5151-likert-text { font-size:.72rem;line-height:1.18; }
+
+    .v5151-question-error {
+      display:none;margin-top:7px;color:#ffb5ad;font-size:.85rem;font-weight:700;
+    }
+    .v5151-has-error { border-color:rgba(255,142,130,.60); }
+    .v5151-has-error .v5151-question-error { display:block; }
+
+    @media (max-width:720px) {
+      .v5151-survey-section { padding:15px 12px; }
+      .v5151-likert-scale { grid-template-columns:1fr; }
+      .v5151-likert-option {
+        min-height:0;flex-direction:row;justify-content:flex-start;text-align:left;padding:9px 10px;
+      }
+      .v5151-likert-text { font-size:.86rem; }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function cssEscape(value) {
+  if (window.CSS?.escape) return CSS.escape(String(value));
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+}
+
 
 async function runComprehensionIfNeeded(exp, video, tracker) {
   if (!exp.comprehension?.questions?.length) return null;
@@ -468,7 +723,7 @@ async function waitForFistOrClick(video, tracker, buttonSelector) {
           fistSince = null;
           openHandSince = null;
           gestureArmed = false;
-          setGesturePrompt("READ THE 3 STEPS ABOVE", `Please read before starting · ${Math.ceil((MIN_READ_MS-readElapsed)/1000)}s`, "read");
+          setGesturePrompt("READ THE 3 STEPS ABOVE", `Please read before starting 繚 ${Math.ceil((MIN_READ_MS-readElapsed)/1000)}s`, "read");
         } else if (!gestureArmed) {
           fistSince = null;
           if (anyHand && !fist) {
@@ -902,4 +1157,5 @@ function nextFrame() {
 }
 
 function round(v, d) { const p = 10 ** d; return Math.round(v * p) / p; }
+
 
