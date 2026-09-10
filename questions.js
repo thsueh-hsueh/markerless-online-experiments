@@ -104,6 +104,7 @@ export const POST_TASK_QUESTIONS = [
     section: "About you",
     label: "What is the highest level of education you have completed?",
     type: "select",
+    required: true,
     options: [
       "Less than high school",
       "High school or equivalent",
@@ -119,6 +120,7 @@ export const POST_TASK_QUESTIONS = [
     section: "About you",
     label: "What is your current employment status?",
     type: "select",
+    required: true,
     options: [
       "Employed full-time",
       "Employed part-time",
@@ -134,6 +136,7 @@ export const POST_TASK_QUESTIONS = [
     section: "About you",
     label: "What is your current or most recent occupation?",
     type: "text",
+    required: true,
     help: "If you are a student and have not held an occupation, you may enter \"Student\".",
     placeholder: "e.g. Software engineer, teacher, student",
   },
@@ -146,6 +149,7 @@ export const POST_TASK_QUESTIONS = [
     section: "Your experience",
     label: "How often do you play video or computer games?",
     type: "select",
+    required: true,
     options: [
       "Never",
       "Less than once a week",
@@ -160,6 +164,7 @@ export const POST_TASK_QUESTIONS = [
     section: "Your experience",
     label: "On a typical day, approximately how many hours do you use a desktop or laptop computer?",
     type: "number",
+    required: true,
     min: 0,
     max: 24,
     placeholder: "e.g. 6.5",
@@ -169,6 +174,7 @@ export const POST_TASK_QUESTIONS = [
     section: "Your experience",
     label: "On how many days in a typical week do you do at least 30 minutes of moderate or vigorous physical activity?",
     type: "number",
+    required: true,
     min: 0,
     max: 7,
     placeholder: "e.g. 3",
@@ -178,6 +184,7 @@ export const POST_TASK_QUESTIONS = [
     section: "Your experience",
     label: "Were you wearing vision correction during this study?",
     type: "select",
+    required: true,
     options: ["None", "Glasses", "Contact lenses", "Prefer not to say"],
   },
   {
@@ -185,6 +192,7 @@ export const POST_TASK_QUESTIONS = [
     section: "Your experience",
     label: "Do you have a health condition that affects your arm or hand movement, coordination, or sensation?",
     type: "select",
+    required: true,
     options: ["No", "Yes", "Prefer not to say"],
   },
 
@@ -196,6 +204,7 @@ export const POST_TASK_QUESTIONS = [
     section: "How you feel today",
     label: "How many hours did you sleep last night?",
     type: "number",
+    required: true,
     min: 0,
     max: 24,
     placeholder: "e.g. 7.5",
@@ -205,6 +214,7 @@ export const POST_TASK_QUESTIONS = [
     section: "How you feel today",
     label: "How sleepy do you feel right now?",
     type: "select",
+    required: true,
     options: [
       "1 - Extremely alert",
       "2 - Very alert",
@@ -232,9 +242,20 @@ export const POST_TASK_QUESTIONS = [
   {
     id: "distractionDescription",
     section: "Distractions",
-    label: "If yes, what distracted you?",
-    type: "textarea",
-    placeholder: "Optional",
+    label: "What distracted you?",
+    type: "checkboxes",
+    required: true,
+    help: "Select all that apply.",
+    options: [
+      "Noise or activity around me",
+      "Someone interrupted or spoke to me",
+      "Phone or notifications",
+      "Another browser tab or computer application",
+      "Hand or arm fatigue or discomfort",
+      "Camera or hand-tracking problem",
+      "I lost focus or my mind wandered",
+      "Other distraction",
+    ],
   },
 
   // ---------------------------------------------------------------------------
@@ -271,7 +292,7 @@ export const POST_TASK_QUESTIONS = [
   {
     id: "trackingSmoothReliable",
     section: "Your experience with the game",
-    label: "The hand tracking and cursor control worked smoothly.",
+    label: "The hand tracking and the dot showing my hand position worked smoothly.",
     type: "likert",
     required: true,
   },
@@ -291,15 +312,15 @@ export const POST_TASK_QUESTIONS = [
   },
 
   // ---------------------------------------------------------------------------
-  // Optional feedback
+  // Final feedback
   // ---------------------------------------------------------------------------
   {
     id: "changeOneThing",
     section: "Anything else?",
     label: "Is there anything you would change about the game?",
     type: "textarea",
-    required: false,
-    placeholder: "Optional",
+    required: true,
+    placeholder: "Enter your response (or type \"No\").",
   },
 ];
 
