@@ -1,4 +1,4 @@
-﻿/* experiment.js: V5.16.4 JT-flow runner.
+/* experiment.js: V5.16.4 JT-flow runner.
  *
  * You should not need to change this file to build a new experiment. It takes
  * an experiment definition (see experiments/_template.js) and walks the
@@ -23,6 +23,8 @@ import { getParticipant, getEnvironment, requestedExperiment } from "./participa
 import * as ui from "./ui.js";
 
 export async function main() {
+  document.documentElement.lang = "en";
+  document.documentElement.setAttribute("translate", "no");
   const name = requestedExperiment(ACTIVE_EXPERIMENT);
 
   let exp;
@@ -98,7 +100,7 @@ async function run(exp) {
   if (!devMode && DEMOGRAPHIC_QUESTIONS.length) {
     configureQuestionScreen({
       title: "A few quick questions",
-      subtitle: "This should take less than 30 seconds.",
+      subtitle: "",
       buttonText: "Next",
     });
     demographics = await collectQuestionSet(DEMOGRAPHIC_QUESTIONS);
@@ -236,7 +238,7 @@ async function run(exp) {
       trackerDelegate: trackerMeta.delegate,
       trackerErrors: trackerMeta.errorCount,
     },
-    runnerBuild: "v5.17-likert-survey-restored-20260910",
+    runnerBuild: "v5.17-final-likert-english-20260910",
     schemaVersion: 5,
   };
 
@@ -248,7 +250,7 @@ async function run(exp) {
     updateSavingProgress(uploadManager.progress(), "Saving your game data...");
 
     let slowTimer = setTimeout(() => {
-      updateSavingProgress(uploadManager.progress(), "Still saving ??your connection is taking longer than usual. Please keep this page open.");
+      updateSavingProgress(uploadManager.progress(), "Still saving — your connection is taking longer than usual. Please keep this page open.");
     }, 15000);
 
     try {
@@ -271,9 +273,9 @@ async function run(exp) {
   let postTaskSurveySavePromise = null;
   if (exp.participantFlow?.postTaskSurvey && (!devMode || showPostInDev) && POST_TASK_QUESTIONS?.length) {
     configureQuestionScreen({
-      title: "A few final questions",
-      subtitle: "Your game data have been saved. Complete these questions to see your score.",
-      buttonText: "Show my score",
+      title: "Final Questions",
+      subtitle: "Please answer the questions below to see your Treasure Hunt score.",
+      buttonText: "See My Score",
     });
     postTaskSurvey = await collectParticipantSurvey(POST_TASK_QUESTIONS, POST_TASK_LIKERT_SCALE);
 
@@ -353,14 +355,9 @@ async function collectQuestionSet(questions) {
   }
 }
 
-
-/* ============================================================
- * RESTORED SECTIONED POST-TASK SURVEY / 1–5 LIKERT RENDERER
- * Restored from the V5.15.1 participant-flow runner.
- * ============================================================ */
-
 async function collectParticipantSurvey(questions, likertScale = {}) {
   const formEl = ui.$("#demographics-form");
+  const button = ui.$("#btn-demographics");
   ensureParticipantSurveyStyles();
   formEl.innerHTML = "";
   formEl.classList.add("v5151-final-survey");
@@ -398,7 +395,6 @@ async function collectParticipantSurvey(questions, likertScale = {}) {
     await ui.waitForClick("#btn-demographics");
     const result = readParticipantSurvey(formEl, questions);
     clearSurveyErrors(formEl);
-
     if (result.ok) {
       formEl.classList.remove("v5151-final-survey");
       return result.values;
@@ -520,14 +516,12 @@ function clearSurveyErrors(formEl) {
 
 function ensureParticipantSurveyStyles() {
   if (document.getElementById("v5151-final-survey-style")) return;
-
   const style = document.createElement("style");
   style.id = "v5151-final-survey-style";
   style.textContent = `
     body:has(#screen-demographics.visible) main { max-width:920px; }
     #screen-demographics > h2 { margin-bottom:4px; }
-    #v516-question-note:not([hidden]) { max-width:720px;margin:4px auto 18px;text-align:center;color:#aebed2; }
-
+    #v515-question-note:not([hidden]) { max-width:720px;margin:4px auto 18px;text-align:center;color:#aebed2; }
     .v5151-final-survey { display:grid;gap:16px;margin-top:18px; }
     .v5151-survey-section {
       padding:18px 20px 20px;border-radius:20px;
@@ -546,7 +540,6 @@ function ensureParticipantSurveyStyles() {
     .v5151-question-label { color:#edf4ff;font-weight:730;line-height:1.38; }
     .v5151-question-help { margin:5px 0 8px;color:#aebed2;font-size:.9rem;line-height:1.4; }
     .v5151-required { color:#ffcf77; }
-
     .v5151-survey-question select,
     .v5151-survey-question input[type="text"],
     .v5151-survey-question input[type="number"],
@@ -555,12 +548,8 @@ function ensureParticipantSurveyStyles() {
       border:1px solid rgba(173,205,246,.22);background:#0b1a35;color:#f4f8ff;
       font:600 .96rem/1.3 system-ui,sans-serif;
     }
-
     .v5151-survey-question textarea { resize:vertical;min-height:78px; }
-
-    .v5151-likert-scale {
-      display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-top:10px;
-    }
+    .v5151-likert-scale { display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-top:10px; }
     .v5151-likert-option {
       min-height:78px;padding:9px 5px 8px;border-radius:11px;cursor:pointer;
       display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:5px;
@@ -574,19 +563,13 @@ function ensureParticipantSurveyStyles() {
     .v5151-likert-option input { margin:0;accent-color:#8fb8ff; }
     .v5151-likert-number { font-weight:900;color:#f0f6ff; }
     .v5151-likert-text { font-size:.72rem;line-height:1.18; }
-
-    .v5151-question-error {
-      display:none;margin-top:7px;color:#ffb5ad;font-size:.85rem;font-weight:700;
-    }
+    .v5151-question-error { display:none;margin-top:7px;color:#ffb5ad;font-size:.85rem;font-weight:700; }
     .v5151-has-error { border-color:rgba(255,142,130,.60); }
     .v5151-has-error .v5151-question-error { display:block; }
-
     @media (max-width:720px) {
       .v5151-survey-section { padding:15px 12px; }
       .v5151-likert-scale { grid-template-columns:1fr; }
-      .v5151-likert-option {
-        min-height:0;flex-direction:row;justify-content:flex-start;text-align:left;padding:9px 10px;
-      }
+      .v5151-likert-option { min-height:0;flex-direction:row;justify-content:flex-start;text-align:left;padding:9px 10px; }
       .v5151-likert-text { font-size:.86rem; }
     }
   `;
@@ -606,7 +589,6 @@ function cssEscape(value) {
   if (window.CSS?.escape) return CSS.escape(String(value));
   return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
 }
-
 
 async function runComprehensionIfNeeded(exp, video, tracker) {
   if (!exp.comprehension?.questions?.length) return null;
@@ -723,7 +705,7 @@ async function waitForFistOrClick(video, tracker, buttonSelector) {
           fistSince = null;
           openHandSince = null;
           gestureArmed = false;
-          setGesturePrompt("READ THE 3 STEPS ABOVE", `Please read before starting 繚 ${Math.ceil((MIN_READ_MS-readElapsed)/1000)}s`, "read");
+          setGesturePrompt("READ THE 3 STEPS ABOVE", `Please read before starting · ${Math.ceil((MIN_READ_MS-readElapsed)/1000)}s`, "read");
         } else if (!gestureArmed) {
           fistSince = null;
           if (anyHand && !fist) {
@@ -1157,5 +1139,4 @@ function nextFrame() {
 }
 
 function round(v, d) { const p = 10 ** d; return Math.round(v * p) / p; }
-
 
