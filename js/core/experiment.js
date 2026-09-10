@@ -22,6 +22,45 @@ import * as fb from "./firebase.js?v=515";
 import { getParticipant, getEnvironment, requestedExperiment } from "./participant.js";
 import * as ui from "./ui.js";
 
+function detectBrowserInfo() {
+  const ua = navigator.userAgent || "";
+  let name = "Unknown";
+  let version = "";
+
+  const edge = ua.match(/Edg\/([\d.]+)/);
+  const chrome = ua.match(/Chrome\/([\d.]+)/);
+  const firefox = ua.match(/Firefox\/([\d.]+)/);
+  const safari = ua.match(/Version\/([\d.]+).*Safari/);
+
+  if (edge) {
+    name = "Edge";
+    version = edge[1];
+  } else if (chrome) {
+    name = "Chrome";
+    version = chrome[1];
+  } else if (firefox) {
+    name = "Firefox";
+    version = firefox[1];
+  } else if (safari) {
+    name = "Safari";
+    version = safari[1];
+  }
+
+  return { browserName: name, browserVersion: version };
+}
+
+function prolificCompletionCode() {
+  const explicit = STUDY.completionCode;
+  if (explicit) return String(explicit);
+  const redirect = STUDY.completionRedirectUrl;
+  if (!redirect) return "";
+  try {
+    return new URL(redirect, window.location.href).searchParams.get("cc") || "";
+  } catch {
+    return "";
+  }
+}
+
 export async function main() {
   document.documentElement.lang = "en";
   document.documentElement.setAttribute("translate", "no");
@@ -235,10 +274,11 @@ async function run(exp) {
     settings: { recording: RECORDING, trackerOptions: exp.trackerOptions ?? {} },
     environment: {
       ...getEnvironment(),
+      ...detectBrowserInfo(),
       trackerDelegate: trackerMeta.delegate,
       trackerErrors: trackerMeta.errorCount,
     },
-    runnerBuild: "v5.17-final-likert-themed-ending-20260910",
+    runnerBuild: "v5.18.1-angular-slice-ui-polish-20260910",
     schemaVersion: 5,
   };
 
@@ -268,19 +308,19 @@ async function run(exp) {
     ui.downloadJson(`${sessionId}.json`, sessionDoc);
   }
 
-  /* ---- 7. Bonus post-task survey. Core game data are already safe. */
+  /* ---- 7. Required post-task survey. Core game data are already safe. */
   let postTaskSurvey = null;
   let postTaskSurveySavePromise = null;
   if (exp.participantFlow?.postTaskSurvey && (!devMode || showPostInDev) && POST_TASK_QUESTIONS?.length) {
     configureQuestionScreen({
-      title: "Final Questions",
-      subtitle: "Please answer the questions below to see your Treasure Hunt score.",
+      title: "Please answer the questions below to see your Treasure Hunt score.",
+      subtitle: "",
       buttonText: "See My Score",
     });
     postTaskSurvey = await collectParticipantSurvey(POST_TASK_QUESTIONS, POST_TASK_LIKERT_SCALE);
 
     if (saving) {
-      // Bonus survey upload starts immediately but never blocks the score screen.
+      // Save required post-task responses immediately.
       postTaskSurveySavePromise = fb.savePostTaskSurvey(sessionId, {
         experimentId: exp.id,
         participantId: participant.participantId,
@@ -315,6 +355,7 @@ async function run(exp) {
   if (exp.participantFlow?.showScore) {
     prepareTreasureDoneScreen(score);
   }
+  prepareCompletionCodeUi({ saving, participant, sessionId });
 
   ui.showScreen("screen-done");
   if (saving && STUDY.completionRedirectUrl) {
@@ -331,7 +372,42 @@ function configureQuestionScreen({ title, subtitle, buttonText }) {
   const screen = ui.$("#screen-demographics");
   if (!screen) return;
   const h2 = screen.querySelector("h2");
-  if (h2) h2.textContent = title;
+
+  /* V5.18.1: keep the final questionnaire visually connected to the
+     Treasure Hunt without adding extra explanatory copy. */
+  let treasureIcon = screen.querySelector("#v518-final-question-chest");
+  const isFinalSurvey = buttonText === "See My Score";
+  if (!treasureIcon) {
+    treasureIcon = document.createElement("div");
+    treasureIcon.id = "v518-final-question-chest";
+    treasureIcon.setAttribute("aria-hidden", "true");
+    treasureIcon.style.cssText = "display:none;text-align:center;margin:0 auto 10px;";
+    treasureIcon.innerHTML = `
+      <svg width="66" height="58" viewBox="0 0 116 100" aria-hidden="true">
+        <path d="M24 48h68v35H24z" fill="#7e421d" stroke="#f0c56c" stroke-width="3"/>
+        <path d="M24 48c4-21 16-31 34-31s30 10 34 31H24Z" fill="#bd7130" stroke="#f0c56c" stroke-width="3"/>
+        <path d="M42 20v63M74 20v63" stroke="#e8bd62" stroke-width="4"/>
+        <rect x="51" y="55" width="14" height="14" rx="3" fill="#ffe69b"/>
+      </svg>`;
+    if (h2) h2.before(treasureIcon);
+    else screen.prepend(treasureIcon);
+  }
+  treasureIcon.style.display = isFinalSurvey ? "block" : "none";
+
+  /* Hide any legacy static note such as "The rest are optional"; the
+     current questionnaire itself controls required fields. */
+  screen.querySelectorAll(":scope > p.subtle").forEach((p) => {
+    if (p.id !== "v516-question-note") p.hidden = true;
+  });
+
+  if (h2) {
+    h2.textContent = title;
+    h2.style.maxWidth = "820px";
+    h2.style.marginLeft = "auto";
+    h2.style.marginRight = "auto";
+    h2.style.fontSize = "clamp(1.7rem, 3.8vw, 2.6rem)";
+    h2.style.lineHeight = "1.12";
+  }
 
   let note = screen.querySelector("#v516-question-note");
   if (!note) {
@@ -387,8 +463,13 @@ async function collectParticipantSurvey(questions, likertScale = {}) {
     if (!distractionWrap || !distractionSelect) return;
     const show = distractionSelect.value === "Yes" || distractionSelect.value === "Not sure";
     distractionWrap.hidden = !show;
-    const input = distractionWrap.querySelector("textarea,input,select");
-    if (!show && input) input.value = "";
+    const inputs = distractionWrap.querySelectorAll("textarea,input,select");
+    if (!show) {
+      inputs.forEach((input) => {
+        if (input.type === "checkbox" || input.type === "radio") input.checked = false;
+        else input.value = "";
+      });
+    }
   };
   distractionSelect?.addEventListener("change", syncDistraction);
   syncDistraction();
@@ -443,6 +524,18 @@ function buildParticipantSurveyQuestion(q, likertScale) {
       scale.appendChild(option);
     }
     wrap.appendChild(scale);
+  } else if (q.type === "checkboxes") {
+    const choices = document.createElement("div");
+    choices.className = "v5151-checkbox-grid";
+    for (const opt of (q.options || [])) {
+      const option = document.createElement("label");
+      option.className = "v5151-checkbox-option";
+      option.innerHTML = `
+        <input type="checkbox" name="${escapeHtml(q.id)}" value="${escapeHtml(opt)}">
+        <span>${escapeHtml(opt)}</span>`;
+      choices.appendChild(option);
+    }
+    wrap.appendChild(choices);
   } else if (q.type === "select") {
     const select = document.createElement("select");
     select.name = q.id;
@@ -494,6 +587,10 @@ function readParticipantSurvey(formEl, questions) {
     if (q.type === "likert") {
       const checked = wrap.querySelector(`input[name="${cssEscape(q.id)}"]:checked`);
       value = checked ? Number(checked.value) : "";
+    } else if (q.type === "checkboxes") {
+      value = Array.from(
+        wrap.querySelectorAll(`input[name="${cssEscape(q.id)}"]:checked`)
+      ).map((el) => el.value);
     } else {
       const field = wrap.querySelector(`[name="${cssEscape(q.id)}"]`);
       value = field?.value?.trim?.() ?? "";
@@ -502,7 +599,7 @@ function readParticipantSurvey(formEl, questions) {
 
     values[q.id] = value;
 
-    const missing = q.required && (value === "" || value == null);
+    const missing = q.required && (value === "" || value == null || (Array.isArray(value) && value.length === 0));
     const outOfRange = q.type === "number" && value !== "" && (
       (Number.isFinite(q.min) && value < q.min) ||
       (Number.isFinite(q.max) && value > q.max)
@@ -553,6 +650,16 @@ function ensureParticipantSurveyStyles() {
       font:600 .96rem/1.3 system-ui,sans-serif;
     }
     .v5151-survey-question textarea { resize:vertical;min-height:78px; }
+    .v5151-checkbox-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px; }
+    .v5151-checkbox-option {
+      display:flex;align-items:flex-start;gap:9px;padding:10px 11px;border-radius:12px;
+      background:rgba(255,255,255,.035);border:1px solid rgba(188,215,255,.11);
+      cursor:pointer;line-height:1.25;
+    }
+    .v5151-checkbox-option:has(input:checked) {
+      background:rgba(111,164,255,.12);border-color:rgba(143,190,255,.36);
+    }
+    .v5151-checkbox-option input { margin-top:2px;accent-color:#8fb8ff; }
     .v5151-likert-scale { display:grid;grid-template-columns:repeat(5,1fr);gap:7px;margin-top:10px; }
     .v5151-likert-option {
       min-height:78px;padding:9px 5px 8px;border-radius:11px;cursor:pointer;
@@ -572,6 +679,7 @@ function ensureParticipantSurveyStyles() {
     .v5151-has-error .v5151-question-error { display:block; }
     @media (max-width:720px) {
       .v5151-survey-section { padding:15px 12px; }
+      .v5151-checkbox-grid { grid-template-columns:1fr; }
       .v5151-likert-scale { grid-template-columns:1fr; }
       .v5151-likert-option { min-height:0;flex-direction:row;justify-content:flex-start;text-align:left;padding:9px 10px; }
       .v5151-likert-text { font-size:.86rem; }
@@ -661,16 +769,23 @@ function looksLikeFist(landmarks) {
 async function waitForFistOrClick(video, tracker, buttonSelector) {
   const button = ui.$(buttonSelector);
   if (!button) return;
-  button.textContent = "Start with a click instead";
+  button.textContent = "Press Enter to start";
 
-  const MIN_READ_MS = 6000;
+  const MIN_READ_MS = 8000;
   const OPEN_HAND_ARM_MS = 1000;
   const FIST_HOLD_MS = 1200;
   const shownAt = performance.now();
 
   let done = false;
   const onClick = () => { done = true; };
+  const onKeyDown = (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      done = true;
+    }
+  };
   button.addEventListener("click", onClick);
+  window.addEventListener("keydown", onKeyDown);
 
   let fistSince = null;
   let openHandSince = null;
@@ -739,6 +854,7 @@ async function waitForFistOrClick(video, tracker, buttonSelector) {
     }
   } finally {
     button.removeEventListener("click", onClick);
+    window.removeEventListener("keydown", onKeyDown);
   }
 }
 
@@ -833,8 +949,8 @@ function computeTreasureScore(summaries) {
     .filter((r) => !r.timedOut && !r.invalid);
 
   const hits = reaches.filter((r) => {
+    if (r.angularHit === 1) return true;
     if (r.endpointInsideTarget === 1) return true;
-    if (Number.isFinite(r.initialDistanceToTarget)) return r.initialDistanceToTarget <= 0.10;
     return false;
   }).length;
   const planned = summaries
@@ -846,6 +962,7 @@ function computeTreasureScore(summaries) {
 function scoreCard(score) {
   const total = Math.max(0, score.total || 0);
   const hits = Math.max(0, score.hits || 0);
+  const percent = total > 0 ? Math.round(100 * hits / total) : 0;
   return `
     <div class="v5151-treasure-result">
       <div class="v5151-result-sparkles" aria-hidden="true">
@@ -875,9 +992,42 @@ function scoreCard(score) {
         <rect x="99" y="90" width="22" height="20" rx="4" fill="#ffe49a" stroke="#9c6824" stroke-width="3"/>
       </svg>
       <div class="v5151-result-kicker">YOUR TREASURE HAUL</div>
-      <div class="v5151-result-score">${hits} <span>of</span> ${total}</div>
+      <div class="v5151-result-score">${percent}%</div>
       <div class="v5151-result-message">You collected ${hits} of ${total} gems!</div>
     </div>`;
+}
+
+
+function prepareCompletionCodeUi({ saving, participant, sessionId }) {
+  const screen = ui.$("#screen-done");
+  if (!screen) return;
+
+  const savedLine = ui.$("#done-saved-line");
+  if (savedLine) savedLine.hidden = true;
+
+  let box = document.getElementById("v518-prolific-code");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "v518-prolific-code";
+    box.style.cssText = "max-width:560px;margin:12px auto 6px;padding:12px 16px;border-radius:14px;background:rgba(255,255,255,.055);border:1px solid rgba(188,215,255,.13);font-weight:720;";
+    const redirectNote = ui.$("#done-redirect-note");
+    if (redirectNote) redirectNote.before(box);
+    else screen.appendChild(box);
+  }
+
+  if (!saving) {
+    box.textContent = `Development session: ${sessionId}`;
+    return;
+  }
+
+  const code = prolificCompletionCode();
+  if (code) {
+    box.innerHTML = `Prolific completion code: <strong style="font-size:1.18em;letter-spacing:.04em;">${escapeHtml(code)}</strong>`;
+  } else if (participant?.prolific?.pid || participant?.source === "prolific") {
+    box.textContent = "Your responses have been saved. You will be returned to Prolific.";
+  } else {
+    box.textContent = "Your responses have been saved.";
+  }
 }
 
 function prepareTreasureDoneScreen(score) {
