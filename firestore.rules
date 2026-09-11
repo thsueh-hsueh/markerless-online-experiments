@@ -75,6 +75,16 @@ service cloud.firestore {
 
         allow read, update, delete: if false;
       }
+
+      match /postTaskSurvey/{responseId} {
+
+        allow create: if signedIn()
+                      && ownedByCaller()
+                      && request.resource.data.sessionId == sessionId
+                      && responseId == 'response';
+
+        allow read, update, delete: if false;
+      }
     }
 
     // Anything not explicitly allowed above is denied.

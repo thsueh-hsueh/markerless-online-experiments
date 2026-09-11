@@ -1,148 +1,333 @@
 /* =============================================================================
- *  questions.js: participant background and current-state questions asked before the task starts.
- * =============================================================================
- *
- *  THIS FILE IS MEANT TO BE EDITED. Add, remove, or reorder the entries in
- *  DEMOGRAPHIC_QUESTIONS below and reload the page. Nothing else needs changing:
- *  the form builds itself, validates itself, and the answers are saved under
- *  `demographics` in each session.
- *
- *  After editing, open preview.html to see your questions the way participants
- *  will, and to have common mistakes pointed out.
- *
- *  Full guide with examples: docs/EDITING-QUESTIONS.md
- *
- *  ---------------------------------------------------------------------------
- *  ADDING A QUESTION
- *  ---------------------------------------------------------------------------
- *  Copy one of the entries below and change it. Every question needs an `id`
- *  and a `label`. The `id` becomes the column name in your data, so use short
- *  names without spaces, and do not reuse one.
- *
- *      { id: "handedness", label: "Dominant hand", type: "select",
- *        options: ["Right", "Left"] }
- *
- *  ---------------------------------------------------------------------------
- *  THE FIVE TYPES
- *  ---------------------------------------------------------------------------
- *      type: "select"     a drop-down. Needs `options`.
- *      type: "radio"      the same, but all choices shown at once. Needs `options`.
- *      type: "checkboxes" choose any number. Needs `options`. Saved as a list.
- *      type: "number"     a number box. Optional `min` and `max`.
- *      type: "text"       a single line of text.
- *      type: "textarea"   a larger box for a longer answer.
- *
- *  ---------------------------------------------------------------------------
- *  OPTIONAL SETTINGS ON ANY QUESTION
- *  ---------------------------------------------------------------------------
- *      required: true     participant cannot continue without answering.
- *                         Shown with a red asterisk. Defaults to false.
- *      help: "..."        smaller grey text under the label.
- *      placeholder: "..." greyed-out example inside a text or number box.
- *
- *  ---------------------------------------------------------------------------
- *  ONE SPECIAL ID
- *  ---------------------------------------------------------------------------
- *  A question with id "participantId" is also used as the participant's ID in
- *  your data. If they arrived from Prolific it is filled in for them. If they
- *  leave it blank they are given a random anonymous ID instead. Delete this
- *  question if you do not want to ask for it.
- *
- *  To skip demographics entirely, set DEMOGRAPHIC_QUESTIONS to an empty list:
- *      export const DEMOGRAPHIC_QUESTIONS = [];
- */
+ * questions.js — V5.15.1 participant flow
+ * -----------------------------------------------------------------------------
+ * BEFORE THE GAME: six essential questions only.
+ * AFTER THE GAME: background, current-state, distraction, and task-feedback
+ * questions. The post-task survey is displayed in participant-facing sections
+ * by js/core/experiment.js.
+ * ============================================================================= */
 
 export const DEMOGRAPHIC_QUESTIONS = [
-  { id: "age",
-    label: "Age",
+  {
+    id: "age",
+    label: "What is your age in years?",
     type: "number",
     required: true,
-    placeholder: "e.g. 42",
+    placeholder: "e.g. 24",
     min: 18,
-    max: 120 },
-
-  { id: "sexAtBirth",
-    label: "Sex assigned at birth",
-    type: "select",
-    required: true,
-    options: ["Female", "Male", "Intersex", "Prefer not to say"] },
-
-  { id: "dominantHand",
+    max: 120,
+  },
+  {
+    id: "dominantHand",
     label: "Which hand do you primarily use for everyday activities such as writing?",
     type: "select",
     required: true,
-    options: ["Right", "Left", "Mixed / no clear preference", "Prefer not to say"] },
-
-  { id: "device",
-    label: "What device are you using?",
+    options: ["Right", "Left", "Mixed / no clear preference", "Prefer not to say"],
+  },
+  {
+    id: "sexAtBirth",
+    label: "What sex were you assigned at birth?",
     type: "select",
     required: true,
-    options: ["Laptop", "Desktop computer", "Tablet", "Phone"] },
-
-  { id: "education",
-    label: "Highest education completed",
+    options: ["Female", "Male", "Intersex", "Prefer not to say"],
+  },
+  {
+    id: "genderIdentity",
+    label: "What is your current gender identity?",
     type: "select",
-    options: ["Less than high school",
-              "High school or equivalent",
-              "Some college",
-              "Bachelor's degree",
-              "Master's degree",
-              "Doctoral or professional degree",
-              "Prefer not to say"] },
-
-  { id: "visionCorrection",
-    label: "Vision correction worn now",
-    type: "select",
-    options: ["None", "Glasses", "Contact lenses", "Prefer not to say"] },
-
-  { id: "raceEthnicity",
+    required: true,
+    options: ["Woman", "Man", "Non-binary", "Another gender identity", "Prefer not to say"],
+  },
+  {
+    id: "raceEthnicity",
     label: "What is your race and/or ethnicity?",
     type: "checkboxes",
+    required: true,
     help: "Select all that apply.",
-    options: ["American Indian or Alaska Native",
-              "Asian",
-              "Black or African American",
-              "Hispanic or Latino",
-              "Middle Eastern or North African",
-              "Native Hawaiian or Pacific Islander",
-              "White",
-              "Another race or ethnicity",
-              "Prefer not to say"] },
+    options: [
+      "American Indian or Alaska Native",
+      "Asian",
+      "Black or African American",
+      "Hispanic or Latino",
+      "Middle Eastern or North African",
+      "Native Hawaiian or Pacific Islander",
+      "White",
+      "Another race or ethnicity",
+      "Prefer not to say",
+    ],
+  },
+  {
+    id: "householdIncome",
+    label: "What is the approximate annual income, before taxes, of the household that primarily supports you financially?",
+    type: "select",
+    required: true,
+    help: "If you are financially dependent on a parent or guardian, report the household that primarily supports you. If you are financially independent, report your own household.",
+    options: [
+      "Less than $25,000",
+      "$25,000-$49,999",
+      "$50,000-$74,999",
+      "$75,000-$99,999",
+      "$100,000-$149,999",
+      "$150,000-$199,999",
+      "$200,000 or more",
+      "Prefer not to say",
+    ],
+  },
+];
 
-  { id: "gamingFrequency",
+export const POST_TASK_QUESTIONS = [
+  // ---------------------------------------------------------------------------
+  // Setup
+  // ---------------------------------------------------------------------------
+  {
+    id: "device",
+    section: "Your setup",
+    label: "What type of computer did you use for this study?",
+    type: "select",
+    required: true,
+    options: ["Laptop", "Desktop computer", "Other", "Prefer not to say"],
+  },
+  {
+    id: "webcamType",
+    section: "Your setup",
+    label: "What type of webcam did you use?",
+    type: "select",
+    required: true,
+    options: ["Built-in webcam", "External webcam", "Not sure", "Prefer not to say"],
+  },
+
+  // ---------------------------------------------------------------------------
+  // Background
+  // ---------------------------------------------------------------------------
+  {
+    id: "education",
+    section: "About you",
+    label: "What is the highest level of education you have completed?",
+    type: "select",
+    required: true,
+    options: [
+      "Less than high school",
+      "High school or equivalent",
+      "Some college",
+      "Bachelor's degree",
+      "Master's degree",
+      "Doctoral or professional degree",
+      "Prefer not to say",
+    ],
+  },
+  {
+    id: "employmentStatus",
+    section: "About you",
+    label: "What is your current employment status?",
+    type: "select",
+    required: true,
+    options: [
+      "Employed full-time",
+      "Employed part-time",
+      "Student",
+      "Not currently employed",
+      "Retired",
+      "Other",
+      "Prefer not to say",
+    ],
+  },
+  {
+    id: "occupation",
+    section: "About you",
+    label: "What is your current or most recent occupation?",
+    type: "text",
+    required: true,
+    help: "If you are a student and have not held an occupation, you may enter \"Student\".",
+    placeholder: "e.g. Software engineer, teacher, student",
+  },
+
+  // ---------------------------------------------------------------------------
+  // Experience
+  // ---------------------------------------------------------------------------
+  {
+    id: "gamingFrequency",
+    section: "Your experience",
     label: "How often do you play video or computer games?",
     type: "select",
-    options: ["Never",
-              "Less than once a week",
-              "1-2 days per week",
-              "3-5 days per week",
-              "Almost every day",
-              "Prefer not to say"] },
-
-  { id: "sleepHoursLastNight",
-    label: "How many hours did you sleep last night?",
+    required: true,
+    options: [
+      "Never",
+      "Less than once a week",
+      "1-2 days per week",
+      "3-5 days per week",
+      "Almost every day",
+      "Prefer not to say",
+    ],
+  },
+  {
+    id: "dailyComputerUse",
+    section: "Your experience",
+    label: "On a typical day, approximately how many hours do you use a desktop or laptop computer?",
     type: "number",
+    required: true,
     min: 0,
     max: 24,
-    placeholder: "e.g. 7.5" },
+    placeholder: "e.g. 6.5",
+  },
+  {
+    id: "physicalActivityDays",
+    section: "Your experience",
+    label: "On how many days in a typical week do you do at least 30 minutes of moderate or vigorous physical activity?",
+    type: "number",
+    required: true,
+    min: 0,
+    max: 7,
+    placeholder: "e.g. 3",
+  },
+  {
+    id: "visionCorrection",
+    section: "Your experience",
+    label: "Were you wearing vision correction during this study?",
+    type: "select",
+    required: true,
+    options: ["None", "Glasses", "Contact lenses", "Prefer not to say"],
+  },
+  {
+    id: "movementCondition",
+    section: "Your experience",
+    label: "Do you have a health condition that affects your arm or hand movement, coordination, or sensation?",
+    type: "select",
+    required: true,
+    options: ["No", "Yes", "Prefer not to say"],
+  },
 
-  { id: "currentSleepiness",
+  // ---------------------------------------------------------------------------
+  // Current state
+  // ---------------------------------------------------------------------------
+  {
+    id: "sleepHoursLastNight",
+    section: "How you feel today",
+    label: "How many hours did you sleep last night?",
+    type: "number",
+    required: true,
+    min: 0,
+    max: 24,
+    placeholder: "e.g. 7.5",
+  },
+  {
+    id: "currentSleepiness",
+    section: "How you feel today",
     label: "How sleepy do you feel right now?",
     type: "select",
-    options: ["1 - Extremely alert",
-              "2",
-              "3 - Alert",
-              "4",
-              "5 - Neither alert nor sleepy",
-              "6",
-              "7 - Sleepy, but no difficulty staying awake",
-              "8",
-              "9 - Very sleepy, fighting sleep"] },
+    required: true,
+    options: [
+      "1 - Extremely alert",
+      "2 - Very alert",
+      "3 - Alert",
+      "4 - Rather alert",
+      "5 - Neither alert nor sleepy",
+      "6 - Some signs of sleepiness",
+      "7 - Sleepy, but no effort to keep awake",
+      "8 - Sleepy, some effort to keep awake",
+      "9 - Very sleepy, fighting sleep",
+    ],
+  },
 
-  { id: "participantId",
-    label: "Participant ID or Prolific ID",
-    type: "text",
-    help: "If you are participating through Prolific, enter your Prolific ID. Otherwise, leave this blank to receive an anonymous ID.",
-    placeholder: "e.g. 5f3c..." },
+  // ---------------------------------------------------------------------------
+  // Distraction
+  // ---------------------------------------------------------------------------
+  {
+    id: "distracted",
+    section: "Distractions",
+    label: "Were you distracted at any point during the game?",
+    type: "select",
+    required: true,
+    options: ["No", "Yes", "Not sure"],
+  },
+  {
+    id: "distractionDescription",
+    section: "Distractions",
+    label: "What distracted you?",
+    type: "checkboxes",
+    required: true,
+    help: "Select all that apply.",
+    options: [
+      "Noise or activity around me",
+      "Someone interrupted or spoke to me",
+      "Phone or notifications",
+      "Another browser tab or computer application",
+      "Hand or arm fatigue or discomfort",
+      "Camera or hand-tracking problem",
+      "I lost focus or my mind wandered",
+      "Other distraction",
+    ],
+  },
 
+  // ---------------------------------------------------------------------------
+  // Structured task feedback — streamlined to avoid overlapping participant questions.
+  // ---------------------------------------------------------------------------
+  {
+    id: "instructionsClear",
+    section: "Your experience with the game",
+    label: "The instructions were clear.",
+    type: "likert",
+    required: true,
+  },
+  {
+    id: "calibrationEasy",
+    section: "Your experience with the game",
+    label: "The calibration was easy to understand and follow.",
+    type: "likert",
+    required: true,
+  },
+  {
+    id: "taskTooDifficult",
+    section: "Your experience with the game",
+    label: "The game felt too difficult.",
+    type: "likert",
+    required: true,
+  },
+  {
+    id: "physicalDiscomfort",
+    section: "Your experience with the game",
+    label: "My hand, arm, or shoulder felt tired or uncomfortable during the game.",
+    type: "likert",
+    required: true,
+  },
+  {
+    id: "trackingSmoothReliable",
+    section: "Your experience with the game",
+    label: "The hand tracking and the dot showing my hand position worked smoothly.",
+    type: "likert",
+    required: true,
+  },
+  {
+    id: "treasureEngaging",
+    section: "Your experience with the game",
+    label: "The treasure-hunt theme made the game more engaging.",
+    type: "likert",
+    required: true,
+  },
+  {
+    id: "tooLongRepetitive",
+    section: "Your experience with the game",
+    label: "The game felt too long or repetitive.",
+    type: "likert",
+    required: true,
+  },
+
+  // ---------------------------------------------------------------------------
+  // Final feedback
+  // ---------------------------------------------------------------------------
+  {
+    id: "changeOneThing",
+    section: "Anything else?",
+    label: "Is there anything you would change about the game?",
+    type: "textarea",
+    required: true,
+    placeholder: "Enter your response (or type \"No\").",
+  },
 ];
+
+export const POST_TASK_LIKERT_SCALE = {
+  1: "Strongly disagree",
+  2: "Disagree",
+  3: "Neither agree nor disagree",
+  4: "Agree",
+  5: "Strongly agree",
+};
