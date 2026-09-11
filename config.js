@@ -47,8 +47,8 @@ export const ACTIVE_EXPERIMENT = "finger-tapping";
 export const STUDY = {
   // Shown on the welcome screen.
   title: "Hand Movement Study",
-  labName: "Your Lab Name",
-  contactEmail: "you@university.edu",
+  labName: "Physical Intelligence Lab",
+  contactEmail: "thsueh@andrew.cmu.edu",
 
   // Shown above the consent form as a short lead-in.
   consentIntroHtml: `
@@ -59,7 +59,7 @@ export const STUDY = {
   // Where to send participants when they finish. Prolific gives you a URL
   // like https://app.prolific.com/submissions/complete?cc=XXXXXXXX
   // Leave as null to just show a thank-you screen with no redirect.
-  completionRedirectUrl: null,
+  completionRedirectUrl: "https://app.prolific.com/submissions/complete?cc=C19G86LN",
 
 };
 
