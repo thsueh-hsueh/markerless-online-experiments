@@ -145,19 +145,19 @@ const PREFLIGHT_MIN_EXPECTED_HAND_DETECTION = 0.85;
 const PREFLIGHT_MIN_CALIBRATION_AXIS_RANGE = 0.05;
 const PREFLIGHT_MAX_ATTEMPTS_PER_HAND = 2;
 
-/* QA ONLY: on localhost, `&dev=1&forcePreflightFail=1` deliberately fails the
-   calibration performance gate so the retry -> technical-return path can be
-   tested without trying to make a normally fast computer run at <15 Hz.
-   This switch is ignored outside localhost/127.0.0.1. */
-const PREFLIGHT_DEV_FORCE_FAIL = (() => {
+/* QA ONLY — TEST64 ONLY:
+   `&forcePreflightFail=1` deliberately fails the calibration performance gate
+   so the full retry -> technical-return -> Firebase failure-status path can be
+   tested on localhost or GitHub Pages. The 320 production experiment does NOT
+   support this switch. */
+const PREFLIGHT_QA_FORCE_FAIL = (() => {
   if (typeof window === "undefined") return false;
   const params = new URLSearchParams(window.location.search);
-  const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-  return isLocalhost && params.get("dev") === "1" && params.get("forcePreflightFail") === "1";
+  return params.get("forcePreflightFail") === "1";
 })();
 
-if (PREFLIGHT_DEV_FORCE_FAIL) {
-  console.warn("QA MODE: calibration preflight will be forced to fail.");
+if (PREFLIGHT_QA_FORCE_FAIL) {
+  console.warn("QA MODE (test64 only): calibration preflight will be forced to fail.");
 }
 
 
@@ -334,8 +334,8 @@ function calibrationQualityMetrics(frames, hand, calibrationComplete, calibratio
   if (expectedHandDetectionRate < PREFLIGHT_MIN_EXPECTED_HAND_DETECTION) {
     reasons.push(hand === "Left" ? "left_tracking" : "right_tracking");
   }
-  if (PREFLIGHT_DEV_FORCE_FAIL) {
-    reasons.push("dev_forced_preflight_failure");
+  if (PREFLIGHT_QA_FORCE_FAIL) {
+    reasons.push("qa_forced_preflight_failure");
   }
 
   return {
@@ -350,7 +350,7 @@ function calibrationQualityMetrics(frames, hand, calibrationComplete, calibratio
     calibrationGeometryValid: geometryValid,
     evaluatedFrameCount: activeFrames.length,
     directionalFrameCount: directionalFrames.length,
-    devForcedPreflightFailure: PREFLIGHT_DEV_FORCE_FAIL,
+    qaForcedPreflightFailure: PREFLIGHT_QA_FORCE_FAIL,
     thresholds: {
       minMedianProcessedFPS: PREFLIGHT_MIN_MEDIAN_FPS,
       minExpectedHandDetectionRate: PREFLIGHT_MIN_EXPECTED_HAND_DETECTION,
