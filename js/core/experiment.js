@@ -1,4 +1,4 @@
-/* experiment.js: V5.16.4 JT-flow runner.
+/* experiment.js: V5.18.3 qualification + reliability runner.
  *
  * You should not need to change this file to build a new experiment. It takes
  * an experiment definition (see experiments/_template.js) and walks the
@@ -18,9 +18,11 @@ import { renderForm, readForm, focusField } from "./form.js";
 import { startCamera, stopCamera } from "./camera.js";
 import { createTracker } from "./tracker.js";
 import { Recorder } from "./recorder.js?v=3";
-import * as fb from "./firebase.js?v=5182";
+import * as fb from "./firebase.js?v=5183";
 import { getParticipant, getEnvironment, requestedExperiment } from "./participant.js";
 import * as ui from "./ui.js";
+
+const RUNNER_BUILD = "v5.18.3-preflight-gate-save-reliability-qa6-20260912";
 
 function detectBrowserInfo() {
   const ua = navigator.userAgent || "";
@@ -68,7 +70,7 @@ export async function main() {
 
   let exp;
   try {
-exp = (await import(`../../experiments/${name}.js?v=161`)).default;
+    exp = (await import(`../../experiments/${name}.js?v=5183`)).default;
   } catch (err) {
     return ui.fatal(
       `Could not load the experiment "${name}".`,
@@ -156,6 +158,30 @@ async function run(exp) {
   const saving = firebaseEnabled && !devMode;
   const sessionId = fb.newSessionId();
 
+  /* V5.18.3: create the identifiable parent record before camera/trials. If
+     the participant later returns or the browser closes, raw data can still be
+     linked to the Prolific PID instead of becoming an anonymous orphan. */
+  if (saving) {
+    await fb.createSessionStart(sessionId, {
+      experimentId: exp.id,
+      experimentTitle: exp.title,
+      participantId: participant.participantId,
+      participantSource: participant.source,
+      prolific: participant.prolific,
+      condition: participant.condition,
+      startedAt,
+      consent: consentRecord,
+      demographics,
+      status: "in_progress",
+      runnerBuild: RUNNER_BUILD,
+      schemaVersion: 6,
+      environment: {
+        ...getEnvironment(),
+        ...detectBrowserInfo(),
+      },
+    });
+  }
+
   ui.setText("#loading-text", "Starting your camera...");
   const video = await startCamera(RECORDING.video);
   ui.setText("#loading-text", "Loading the hand tracking model...");
@@ -169,6 +195,20 @@ async function run(exp) {
   canvas.height = video.videoHeight;
   const ctx = canvas.getContext("2d");
   stage.hidden = false;
+
+  if (saving) {
+    await fb.saveSessionCheckpoint(sessionId, {
+      status: "in_progress",
+      lastCompletedStage: "camera_tracker_ready",
+      environment: {
+        ...getEnvironment(),
+        ...detectBrowserInfo(),
+        cameraWidth: video.videoWidth || null,
+        cameraHeight: video.videoHeight || null,
+        trackerDelegate: tracker.delegate,
+      },
+    });
+  }
 
   /* Camera check. The experiment's camera Continue button requests fullscreen. */
   ui.showScreen("screen-position");
@@ -185,15 +225,22 @@ async function run(exp) {
 
   const comprehensionRecord = await runComprehensionIfNeeded(exp, video, tracker);
 
-  /* ---- 5. Trials. Uploads are serialized in the BACKGROUND during transitions. */
+  /* ---- 5. Trials. V5.18.3 keeps every calibration attempt, but uses a
+     separate storage index so a retry never overwrites the first attempt. */
   const trials = typeof exp.trials === "function" ? exp.trials() : exp.trials;
   const recorder = new Recorder();
   const trialSummaries = [];
   const demoFrames = [];
   const uploadManager = createUploadManager({ saving, sessionId, experimentId: exp.id, trialCount: trials.length });
+  const trialAttempts = new Map();
+  let executionIndex = 0;
+  let termination = null;
 
-  for (let i = 0; i < trials.length; i++) {
+  for (let i = 0; i < trials.length;) {
     const trial = trials[i];
+    const attemptKey = trial.id ?? `trial_${i}`;
+    const attempt = (trialAttempts.get(attemptKey) ?? 0) + 1;
+    trialAttempts.set(attemptKey, attempt);
     const state = exp.onTrialStart?.(trial, { tracker }) ?? {};
 
     video.style.opacity = trial.showCamera === false ? "0" : "1";
@@ -214,7 +261,9 @@ async function run(exp) {
     }) ?? {};
 
     const currentTrialSummary = {
-      index: i,
+      index: executionIndex,
+      plannedIndex: i,
+      attempt,
       id: trial.id ?? `trial_${i}`,
       ...trial,
       frameCount: recorder.frames.length,
@@ -226,18 +275,78 @@ async function run(exp) {
 
     if (saving) {
       uploadManager.queueTrial({
-        trialIndex: i,
+        trialIndex: executionIndex,
         trialId: trial.id ?? `trial_${i}`,
         chunks: recorder.toChunks(),
         summary: currentTrialSummary,
       });
     } else {
-      demoFrames[i] = recorder.frames.slice();
+      demoFrames[executionIndex] = recorder.frames.slice();
     }
 
-    if (i < trials.length - 1) {
+    const outcome = exp.qualityControl?.evaluateTrial?.({
+      trial,
+      summary: currentTrialSummary,
+      attempt,
+      plannedIndex: i,
+      executionIndex,
+    }) ?? { action: "continue" };
+
+    const completedReachCount = trialSummaries
+      .filter((t) => t.kind === "baseline_reaching")
+      .reduce((sum, t) => sum + (Number.isFinite(t.completedReaches) ? t.completedReaches : 0), 0);
+
+    if (saving) {
+      const checkpoint = {
+        status: outcome.action === "terminate"
+          ? (outcome.status || "technical_runtime_failure")
+          : outcome.action === "retry"
+            ? "preflight_retry"
+            : "in_progress",
+        lastAttemptedStage: trial.id ?? `trial_${i}`,
+        lastTrialStorageIndex: executionIndex,
+        lastTrialAttempt: attempt,
+        completedReachCount,
+      };
+      if (outcome.action === "continue") checkpoint.lastCompletedStage = trial.id ?? `trial_${i}`;
+      if (trial.kind === "baseline_reaching" && currentTrialSummary.blockFinishedNormally === true) {
+        checkpoint.lastCompletedBlock = trial.id;
+      }
+      if (currentTrialSummary.preflightQuality) {
+        checkpoint.preflightLatest = {
+          hand: trial.hand,
+          attempt,
+          ...currentTrialSummary.preflightQuality,
+        };
+      }
+      if (outcome.failureReason) checkpoint.failureReason = outcome.failureReason;
+      uploadManager.queueCheckpoint(checkpoint);
+    }
+
+    executionIndex += 1;
+
+    if (outcome.action === "retry") {
+      await showCalibrationRetry(trial.hand);
+      continue;
+    }
+
+    if (outcome.action === "terminate") {
+      termination = {
+        status: outcome.status || "technical_runtime_failure",
+        failureReason: outcome.failureReason || "technical_failure",
+        reasons: outcome.reasons || [],
+        trialId: trial.id ?? `trial_${i}`,
+        hand: trial.hand ?? null,
+        attempt,
+      };
+      break;
+    }
+
+    i += 1;
+
+    if (i < trials.length) {
       ui.showScreen("screen-rest");
-      ui.setText("#rest-progress", `${i + 1} of ${trials.length} done`);
+      ui.setText("#rest-progress", `${i} of ${trials.length} done`);
       await ui.waitForClick("#btn-next-trial");
     }
   }
@@ -247,6 +356,29 @@ async function run(exp) {
   stopCamera(video);
   tracker.close();
   stage.hidden = true;
+
+  if (termination) {
+    if (saving) {
+      ui.showScreen("screen-saving");
+      ui.setText("#saving-text", "Saving the technical check...");
+      try {
+        if (termination.status === "technical_preflight_failure") {
+          /* Calibration data are relatively small and valuable for tuning the
+             qualification gate, so confirm the raw calibration chunks too. */
+          await uploadManager.flush();
+        } else {
+          /* A runtime failure can occur after a very long block. Confirm the
+             summary/checkpoint immediately without forcing the participant to
+             wait for a large raw-data backlog before seeing the stop screen. */
+          await uploadManager.flushCritical();
+        }
+      } catch (err) {
+        console.warn("Could not confirm all technical-check data before termination:", err);
+      }
+    }
+    showTechnicalStop(termination);
+    return;
+  }
 
   const compactTrialSummaries = trialSummaries.map((t) => {
     const { events, reaches, ...compact } = t;
@@ -275,11 +407,14 @@ async function run(exp) {
     environment: {
       ...getEnvironment(),
       ...detectBrowserInfo(),
+      cameraWidth: video.videoWidth || null,
+      cameraHeight: video.videoHeight || null,
       trackerDelegate: trackerMeta.delegate,
       trackerErrors: trackerMeta.errorCount,
     },
-    runnerBuild: "v5.18.2-angular-slice-save-reliability-20260911",
-    schemaVersion: 5,
+    status: "task_complete_pending_survey",
+    runnerBuild: RUNNER_BUILD,
+    schemaVersion: 6,
   };
 
   /* ---- 6. CORE SAVE before the bonus survey. Real progress; no fake countdown. */
@@ -331,7 +466,27 @@ async function run(exp) {
     }
   }
 
-  /* ---- 8. Score appears only after the post-task survey (or immediately in dev). */
+  /* Required post-task responses and final completion status must both be
+     acknowledged before the participant is given the normal completion flow. */
+  if (saving && postTaskSurveySavePromise) {
+    ui.showScreen("screen-saving");
+    ui.setText("#saving-text", "Saving your final responses...");
+    await postTaskSurveySavePromise;
+  }
+
+  if (saving) {
+    await fb.finalizeSession(sessionId, {
+      lastCompletedStage: "post_task_survey_complete",
+      lastCompletedBlock: trialSummaries
+        .filter((t) => t.kind === "baseline_reaching" && t.blockFinishedNormally === true)
+        .at(-1)?.id ?? null,
+      completedReachCount: trialSummaries
+        .filter((t) => t.kind === "baseline_reaching")
+        .reduce((sum, t) => sum + (Number.isFinite(t.completedReaches) ? t.completedReaches : 0), 0),
+    });
+  }
+
+  /* ---- 8. Score appears only after the post-task survey is safely stored. */
   const score = computeTreasureScore(trialSummaries);
   ui.setHtml(
     "#done-results",
@@ -358,19 +513,38 @@ async function run(exp) {
 
   ui.showScreen("screen-done");
 
-  // The questionnaire is required, so confirm its Firestore write before
-  // navigating away. The prior 1.5 s race could redirect while this write was
-  // still pending, which risks losing the final survey on a slow connection.
-  if (saving && postTaskSurveySavePromise) {
-    ui.setText("#done-redirect-note", "Saving your final responses...");
-    await postTaskSurveySavePromise;
-  }
-
   if (saving && STUDY.completionRedirectUrl) {
     ui.setText("#done-redirect-note", "Returning you to Prolific in 5 seconds...");
     await ui.sleep(5000);
     location.href = STUDY.completionRedirectUrl;
   }
+}
+
+async function showCalibrationRetry(hand) {
+  const handText = hand ? `${hand.toLowerCase()}-hand ` : "";
+  ui.setHtml(
+    "#calibration-retry-message",
+    `<div class="qa-message-title">We had trouble tracking your ${handText || ""}hand consistently.</div>` +
+    `<p class="qa-message-intro">Before trying again, please:</p>` +
+    `<ul class="qa-checklist">` +
+      `<li><span class="qa-icon" aria-hidden="true">💡</span><span>Use a bright room</span></li>` +
+      `<li><span class="qa-icon" aria-hidden="true">✋</span><span>Keep your full hand visible to the camera</span></li>` +
+      `<li><span class="qa-icon" aria-hidden="true">💻</span><span>Close unnecessary programs and browser tabs</span></li>` +
+    `</ul>` +
+    `<p class="qa-message-outro">Then try the calibration again.</p>`
+  );
+  ui.showScreen("screen-calibration-retry");
+  await ui.waitForClick("#btn-calibration-retry");
+}
+
+function showTechnicalStop(termination) {
+  const isPreflight = termination?.status === "technical_preflight_failure";
+  const message = isPreflight
+    ? `<div class="qa-message-title">We can't get stable enough hand tracking on this setup right now, so we need to stop here.</div>` +
+      `<p class="qa-message-outro">This can happen because of the camera, lighting, or device performance.</p>`
+    : `<div class="qa-message-title">Hand tracking became too unstable to continue the study reliably, so we need to stop here.</div>`;
+  ui.setHtml("#technical-stop-message", message);
+  ui.showScreen("screen-technical-stop");
 }
 
 function configureQuestionScreen({ title, subtitle, buttonText }) {
@@ -890,6 +1064,8 @@ function updateSavingProgress(progress, message) {
 
 function createUploadManager({ saving, sessionId, experimentId, trialCount }) {
   const tasks = [];
+  const criticalTasks = [];
+  let checkpointChain = Promise.resolve();
   let totalUnits = 0;
   let completedUnits = 0;
   let finalUnitAdded = false;
@@ -930,6 +1106,7 @@ function createUploadManager({ saving, sessionId, experimentId, trialCount }) {
       completedUnits += 1;
       updateSavingProgress(progress());
     });
+    criticalTasks.push(summaryTask);
 
     const task = Promise.all([chunkTask, summaryTask]).catch((err) => {
       firstError ??= err;
@@ -937,8 +1114,21 @@ function createUploadManager({ saving, sessionId, experimentId, trialCount }) {
     tasks.push(task);
   };
 
+  const queueCheckpoint = (payload) => {
+    if (!saving) return;
+    checkpointChain = checkpointChain
+      .catch(() => {})
+      .then(() => fb.saveSessionCheckpoint(sessionId, payload));
+    const guarded = checkpointChain.catch((err) => {
+      firstError ??= err;
+    });
+    criticalTasks.push(guarded);
+    tasks.push(guarded);
+  };
+
   return {
     queueTrial,
+    queueCheckpoint,
     addFinalUnit() {
       if (!finalUnitAdded) { totalUnits += 1; finalUnitAdded = true; }
     },
@@ -952,6 +1142,10 @@ function createUploadManager({ saving, sessionId, experimentId, trialCount }) {
     async flush() {
       await Promise.all(tasks);
       if (firstError) throw new Error(`A background upload failed: ${firstError.message || firstError}`);
+    },
+    async flushCritical() {
+      await Promise.all(criticalTasks);
+      if (firstError) throw new Error(`A critical background upload failed: ${firstError.message || firstError}`);
     },
     trialCount,
   };

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Experiment</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%E2%9C%8B%3C/text%3E%3C/svg%3E">
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/style.css?v=5183qa5">
 </head>
 <body>
 
@@ -35,10 +35,10 @@
   </div>
 
   <!-- Shown when MediaPipe could not get a GPU context and fell back to the
-       CPU. Not an error: the task works, just at a lower frame rate. -->
+       CPU. Calibration will verify whether the resulting tracking rate is sufficient. -->
   <div id="cpu-banner" class="banner subtle-banner" hidden>
-    Your computer could not use its graphics card for tracking, so this is
-    running on the CPU. It still works, but it may feel a little slower.
+    Hand tracking is running on the CPU and may be slower on this computer.
+    The calibration will check whether tracking performance is sufficient.
   </div>
 
   <!-- 1. Consent ------------------------------------------------------- -->
@@ -90,6 +90,7 @@
     <h2>Let's check your camera</h2>
     <p>Hold your hand up in front of the camera. When we can see it clearly,
        the button below will turn on.</p>
+    <p class="camera-performance-reminder">Please close unnecessary programs and browser tabs before starting.</p>
     <div id="position-stage-slot"></div>
     <p id="position-status" class="status">Looking for your hand…</p>
     <button id="btn-position-done" class="primary" disabled>Continue</button>
@@ -146,6 +147,19 @@
     <p>Take a short break. Shake out your hand if you'd like.</p>
     <p class="subtle" id="rest-progress"></p>
     <button id="btn-next-trial" class="primary">Start the next one</button>
+  </section>
+
+  <!-- Calibration retry / technical qualification ---------------------- -->
+  <section id="screen-calibration-retry" class="screen qa-screen">
+    <h2>Let's try the hand check one more time</h2>
+    <div id="calibration-retry-message" class="prose qa-message"></div>
+    <button id="btn-calibration-retry" class="primary qa-primary">Retry calibration</button>
+  </section>
+
+  <section id="screen-technical-stop" class="screen qa-screen">
+    <h2>Thanks for checking your setup</h2>
+    <div id="technical-stop-message" class="prose qa-message"></div>
+    <p class="qa-return-note">Please return the study on Prolific.</p>
   </section>
 
   <!-- 8 -------------------------------------------------------------- -->
@@ -209,7 +223,7 @@
 </main>
 
 <script type="module">
-  import { main } from "./js/core/experiment.js?v=7";
+  import { main } from "./js/core/experiment.js?v=5183";
   main();
 </script>
 </body>

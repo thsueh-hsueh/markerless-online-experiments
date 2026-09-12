@@ -1,4 +1,4 @@
-/* firebase.js — V5.18.2 save-reliability patch
+/* firebase.js — V5.18.3 qualification + save-reliability patch
  *
  * Keeps the existing Firestore layout, but fixes a failure mode seen in the
  * 320-trial task: a valid Firestore setDoc() can remain pending for longer than
@@ -16,9 +16,12 @@ import { FIREBASE } from "../../config.js";
 const SDK = "https://www.gstatic.com/firebasejs/12.17.1";
 const WRITE_TIMEOUT_MS = 60000;
 const WRITE_RECOVERY_GRACE_MS = 240000;
+const RAW_CHUNK_CONCURRENCY = 3;
 
 let app = null, db = null, auth = null, uid = null;
 let enabled = false;
+let activeRawChunkWrites = 0;
+const rawChunkWaiters = [];
 
 export function configLooksUnfilled() {
   return Object.values(FIREBASE).some(
@@ -114,6 +117,47 @@ async function writeWithRecovery(label, makeWrite) {
   }
 }
 
+async function withRawChunkSlot(work) {
+  if (activeRawChunkWrites >= RAW_CHUNK_CONCURRENCY) {
+    await new Promise((resolve) => rawChunkWaiters.push(resolve));
+  }
+  activeRawChunkWrites += 1;
+  try {
+    return await work();
+  } finally {
+    activeRawChunkWrites -= 1;
+    const next = rawChunkWaiters.shift();
+    if (next) next();
+  }
+}
+
+export async function createSessionStart(sessionId, payload) {
+  if (!enabled) return;
+  const { doc, setDoc, serverTimestamp } = await import(`${SDK}/firebase-firestore.js`);
+  const ref = doc(db, "sessions", sessionId);
+  await writeWithRecovery("Initial session record", () => setDoc(ref, {
+    ...payload,
+    uid,
+    sessionId,
+    status: payload.status ?? "in_progress",
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }));
+}
+
+export async function saveSessionCheckpoint(sessionId, payload) {
+  if (!enabled) return;
+  const { doc, setDoc, serverTimestamp } = await import(`${SDK}/firebase-firestore.js`);
+  const ref = doc(db, "sessions", sessionId);
+  await writeWithRecovery("Session checkpoint", () => setDoc(ref, {
+    ...payload,
+    uid,
+    sessionId,
+    checkpointedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true }));
+}
+
 export async function uploadTrialChunks(sessionId, trialIndex, chunks, meta, onProgress) {
   if (!enabled) return;
   const { doc, setDoc, serverTimestamp } = await import(`${SDK}/firebase-firestore.js`);
@@ -124,17 +168,20 @@ export async function uploadTrialChunks(sessionId, trialIndex, chunks, meta, onP
   let completed = 0;
   const writes = chunks.map((chunk, i) => {
     const ref = doc(db, "sessions", sessionId, "chunks", `${pad(trialIndex)}_${pad(i)}`);
-    return writeWithRecovery(`Raw data chunk ${trialIndex + 1}.${i + 1}`, () => setDoc(ref, {
-      uid,
-      sessionId,
-      experimentId: meta.experimentId,
-      trialIndex,
-      trialId: meta.trialId,
-      chunkIndex: i,
-      chunkCount: chunks.length,
-      frames: chunk,
-      uploadedAt: serverTimestamp(),
-    })).then(() => {
+    return withRawChunkSlot(() => writeWithRecovery(
+      `Raw data chunk ${trialIndex + 1}.${i + 1}`,
+      () => setDoc(ref, {
+        uid,
+        sessionId,
+        experimentId: meta.experimentId,
+        trialIndex,
+        trialId: meta.trialId,
+        chunkIndex: i,
+        chunkCount: chunks.length,
+        frames: chunk,
+        uploadedAt: serverTimestamp(),
+      })
+    )).then(() => {
       completed += 1;
       onProgress?.(completed, chunks.length);
     });
@@ -164,8 +211,23 @@ export async function saveSession(sessionId, payload) {
     ...payload,
     uid,
     sessionId,
+    taskFinishedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  }, { merge: true }));
+}
+
+export async function finalizeSession(sessionId, payload = {}) {
+  if (!enabled) return;
+  const { doc, setDoc, serverTimestamp } = await import(`${SDK}/firebase-firestore.js`);
+  const ref = doc(db, "sessions", sessionId);
+  await writeWithRecovery("Completion status", () => setDoc(ref, {
+    ...payload,
+    uid,
+    sessionId,
+    status: "complete",
     finishedAt: serverTimestamp(),
-  }));
+    updatedAt: serverTimestamp(),
+  }, { merge: true }));
 }
 
 export async function savePostTaskSurvey(sessionId, payload) {

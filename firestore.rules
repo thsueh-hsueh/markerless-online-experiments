@@ -1,7 +1,8 @@
 rules_version = '2';
 
-/* V5.15 rules: same participant-write / no-read policy, plus tightly scoped
- * idempotent retry updates and a bonus post-task survey subcollection. */
+/* V5.18.3 rules: participant-write / no-read policy, plus a mutable parent
+ * session document for checkpoints and final status. Core identity fields are
+ * immutable after the parent document is created. */
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -30,10 +31,17 @@ service cloud.firestore {
                     && request.resource.data.participantId is string
                     && request.resource.data.participantId.size() <= 128;
 
-      // A timed-out retry sends the same payload; only the server timestamp may differ.
+      // V5.18.3 creates the parent record at study start, then merges small
+      // checkpoints and the final session summary into that same document.
+      // Identity/ownership fields cannot be changed after creation.
       allow update: if sameOwner()
                     && request.resource.data.sessionId == sessionId
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['finishedAt']);
+                    && request.resource.data.uid == resource.data.uid
+                    && request.resource.data.experimentId == resource.data.experimentId
+                    && request.resource.data.participantId == resource.data.participantId
+                    && request.resource.data.startedAt == resource.data.startedAt
+                    && !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+                         ['uid', 'sessionId', 'experimentId', 'participantId', 'startedAt']);
 
       allow read, delete: if false;
 
