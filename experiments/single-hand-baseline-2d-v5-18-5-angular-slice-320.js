@@ -2099,7 +2099,7 @@ function setupTreasureShellUi() {
         rest.dataset.treasureRestSec = "5";
         rest.dataset.transitionKind = "practiceComplete";
         if (h2) h2.textContent = "PRACTICE COMPLETE!";
-        if (bodyP) bodyP.innerHTML = `Ready for the treasure hunt.<br><span style="display:inline-block;margin-top:8px;color:#8fb8ff;font-weight:950;letter-spacing:.07em;">FIRST HALF</span><br><span style="display:inline-block;margin-top:4px;font-weight:850;color:#eaf3ff;">HAND-POSITION DOT ${handPositionDotLegendHtml(24)} HIDDEN</span>`;
+        if (bodyP) bodyP.innerHTML = `Ready for the treasure hunt.<br><span style="display:inline-block;margin-top:8px;color:#ffe28a;font-weight:950;letter-spacing:.07em;">START WITH YOUR RIGHT HAND</span><br><span style="display:inline-block;margin-top:5px;color:#8fb8ff;font-weight:950;letter-spacing:.07em;">FIRST HALF</span><br><span style="display:inline-block;margin-top:4px;font-weight:850;color:#eaf3ff;">HAND-POSITION DOT ${handPositionDotLegendHtml(24)} HIDDEN</span>`;
         if (art) art.innerHTML = `<svg width="108" height="88" viewBox="0 0 116 100" aria-hidden="true"><path d="M24 48h68v35H24z" fill="#7e421d" stroke="#f0c56c" stroke-width="3"/><path d="M24 48c4-21 16-31 34-31s30 10 34 31H24Z" fill="#bd7130" stroke="#f0c56c" stroke-width="3"/><path d="M42 20v63M74 20v63" stroke="#e8bd62" stroke-width="4"/><rect x="51" y="55" width="14" height="14" rx="3" fill="#ffe69b"/></svg>`;
         return;
       }
