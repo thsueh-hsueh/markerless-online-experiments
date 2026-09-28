@@ -1,7 +1,7 @@
 import { HAND } from "../js/core/tracker.js";
 
 if (typeof window !== "undefined") {
-  window.__bimanualV19_9Loaded = true;
+  window.__bimanualV19_10Loaded = true;
   console.info("[Bimanual v19-10 FULL] experiment module loaded");
 }
 
