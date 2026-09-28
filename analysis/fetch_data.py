@@ -54,13 +54,21 @@ def connect(project_id: str):
 
 
 def fetch(db, experiment: str | None, limit: int | None):
-    """Pull parent session documents."""
+    """Pull parent session documents, newest first.
+
+    Sort client-side by the ISO startedAt field so --experiment plus --limit
+    does not require an extra Firestore composite index.
+    """
     query = db.collection("sessions")
     if experiment:
         query = query.where("experimentId", "==", experiment)
-    if limit:
-        query = query.limit(limit)
-    return list(query.stream())
+
+    sessions = list(query.stream())
+    sessions.sort(
+        key=lambda snap: (snap.to_dict() or {}).get("startedAt") or "",
+        reverse=True,
+    )
+    return sessions[:limit] if limit else sessions
 
 
 def fetch_frames(db, session_id: str) -> tuple[dict[int, list], dict[int, dict]]:
