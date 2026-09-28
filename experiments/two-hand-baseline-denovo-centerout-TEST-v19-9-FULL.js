@@ -1,8 +1,8 @@
 import { HAND } from "../js/core/tracker.js";
 
 if (typeof window !== "undefined") {
-  window.__bimanualV19_4Loaded = true;
-  console.info("[Bimanual v19-7 FULL] experiment module loaded");
+  window.__bimanualV19_9Loaded = true;
+  console.info("[Bimanual v19-9 FULL] experiment module loaded");
 }
 
 
@@ -3949,9 +3949,9 @@ if (typeof MutationObserver !== 'undefined' && typeof document !== 'undefined') 
 }
 
 export default {
-  id: "two-hand-baseline-denovo-centerout-TEST-v19-7-FULL",
+  id: "two-hand-baseline-denovo-centerout-TEST-v19-9-FULL",
 
-  title: "Two-Hand Baseline + De Novo Center-Out — V19-7 FULL",
+  title: "Two-Hand Baseline + De Novo Center-Out — V19-9 FULL",
 
   tracker: "hand",
 
