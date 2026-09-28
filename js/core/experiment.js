@@ -1,4 +1,4 @@
-/* experiment.js: V5.18.3 qualification + reliability runner.
+/* experiment.js: V5.18.4 bimanual metadata + camera preservation runner.
  *
  * You should not need to change this file to build a new experiment. It takes
  * an experiment definition (see experiments/_template.js) and walks the
@@ -22,7 +22,7 @@ import * as fb from "./firebase.js?v=5183";
 import { getParticipant, getEnvironment, requestedExperiment } from "./participant.js";
 import * as ui from "./ui.js";
 
-const RUNNER_BUILD = "v5.18.3-preflight-gate-save-reliability-qa6-20260912";
+const RUNNER_BUILD = "v5.18.4-bimanual-metadata-camera-20260928";
 
 function detectBrowserInfo() {
   const ua = navigator.userAgent || "";
@@ -70,7 +70,7 @@ export async function main() {
 
   let exp;
   try {
-    exp = (await import(`../../experiments/${name}.js?v=5183`)).default;
+    exp = (await import(`../../experiments/${name}.js?v=5184`)).default;
   } catch (err) {
     return ui.fatal(
       `Could not load the experiment "${name}".`,
@@ -293,7 +293,7 @@ async function run(exp) {
     }) ?? { action: "continue" };
 
     const completedReachCount = trialSummaries
-      .filter((t) => t.kind === "baseline_reaching")
+      .filter((t) => isReachTrialSummary(t))
       .reduce((sum, t) => sum + (Number.isFinite(t.completedReaches) ? t.completedReaches : 0), 0);
 
     if (saving) {
@@ -309,7 +309,7 @@ async function run(exp) {
         completedReachCount,
       };
       if (outcome.action === "continue") checkpoint.lastCompletedStage = trial.id ?? `trial_${i}`;
-      if (trial.kind === "baseline_reaching" && currentTrialSummary.blockFinishedNormally === true) {
+      if (isReachTrialSummary(currentTrialSummary) && currentTrialSummary.blockFinishedNormally === true) {
         checkpoint.lastCompletedBlock = trial.id;
       }
       if (currentTrialSummary.preflightQuality) {
@@ -351,6 +351,11 @@ async function run(exp) {
     }
   }
 
+  /* Preserve camera dimensions before stopCamera() clears the media element. */
+  const cameraMeta = {
+    width: video.videoWidth || null,
+    height: video.videoHeight || null,
+  };
   /* Tracking work is finished; release camera/MediaPipe before the final network flush. */
   const trackerMeta = { delegate: tracker.delegate, errorCount: tracker.errorCount };
   stopCamera(video);
@@ -407,8 +412,8 @@ async function run(exp) {
     environment: {
       ...getEnvironment(),
       ...detectBrowserInfo(),
-      cameraWidth: video.videoWidth || null,
-      cameraHeight: video.videoHeight || null,
+      cameraWidth: cameraMeta.width,
+      cameraHeight: cameraMeta.height,
       trackerDelegate: trackerMeta.delegate,
       trackerErrors: trackerMeta.errorCount,
     },
@@ -478,10 +483,10 @@ async function run(exp) {
     await fb.finalizeSession(sessionId, {
       lastCompletedStage: "post_task_survey_complete",
       lastCompletedBlock: trialSummaries
-        .filter((t) => t.kind === "baseline_reaching" && t.blockFinishedNormally === true)
+        .filter((t) => isReachTrialSummary(t) && t.blockFinishedNormally === true)
         .at(-1)?.id ?? null,
       completedReachCount: trialSummaries
-        .filter((t) => t.kind === "baseline_reaching")
+        .filter((t) => isReachTrialSummary(t))
         .reduce((sum, t) => sum + (Number.isFinite(t.completedReaches) ? t.completedReaches : 0), 0),
     });
   }
@@ -1151,9 +1156,13 @@ function createUploadManager({ saving, sessionId, experimentId, trialCount }) {
   };
 }
 
+function isReachTrialSummary(t) {
+  return t?.kind === "baseline_reaching" || t?.kind === "bimanual_reaching";
+}
+
 function computeTreasureScore(summaries) {
   const reaches = summaries
-    .filter((t) => t.kind === "baseline_reaching")
+    .filter((t) => isReachTrialSummary(t))
     .flatMap((t) => Array.isArray(t.reaches) ? t.reaches : [])
     .filter((r) => !r.timedOut && !r.invalid);
 
@@ -1163,7 +1172,7 @@ function computeTreasureScore(summaries) {
     return false;
   }).length;
   const planned = summaries
-    .filter((t) => t.kind === "baseline_reaching")
+    .filter((t) => isReachTrialSummary(t))
     .reduce((sum, t) => sum + (Number.isFinite(t.requestedReaches) ? t.requestedReaches : 0), 0);
   return { hits, total: planned || reaches.length };
 }
