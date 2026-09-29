@@ -371,9 +371,13 @@ async function run(exp) {
       ui.showScreen("screen-saving");
       ui.setText("#saving-text", "Saving the technical check...");
       try {
-        if (termination.status === "technical_preflight_failure") {
-          /* Calibration data are relatively small and valuable for tuning the
-             qualification gate, so confirm the raw calibration chunks too. */
+        if (
+          termination.status === "technical_preflight_failure" ||
+          termination.status === "technical_dynamic_preflight_failure"
+        ) {
+          /* Static calibration and the early dynamic-QC segment are small and
+             valuable for tuning qualification gates, so confirm their raw
+             chunks and detailed summaries before showing the stop screen. */
           await uploadManager.flush();
         } else {
           /* A runtime failure can occur after a very long block. Confirm the
