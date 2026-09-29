@@ -22,7 +22,7 @@ import * as fb from "./firebase.js?v=5183";
 import { getParticipant, getEnvironment, requestedExperiment } from "./participant.js";
 import * as ui from "./ui.js";
 
-const RUNNER_BUILD = "v5.18.4-bimanual-metadata-camera-20260928";
+const RUNNER_BUILD = "v5.18.5-bimanual-qc-split-20260929";
 
 function detectBrowserInfo() {
   const ua = navigator.userAgent || "";
@@ -70,7 +70,7 @@ export async function main() {
 
   let exp;
   try {
-    exp = (await import(`../../experiments/${name}.js?v=5184`)).default;
+    exp = (await import(`../../experiments/${name}.js?v=5185`)).default;
   } catch (err) {
     return ui.fatal(
       `Could not load the experiment "${name}".`,
@@ -294,7 +294,11 @@ async function run(exp) {
 
     const completedReachCount = trialSummaries
       .filter((t) => isReachTrialSummary(t))
-      .reduce((sum, t) => sum + (Number.isFinite(t.completedReaches) ? t.completedReaches : 0), 0);
+      .reduce((sum, t) => {
+        if (Array.isArray(t.reaches)) return sum + t.reaches.length;
+        if (Number.isFinite(t.reachCount)) return sum + t.reachCount;
+        return sum + (Number.isFinite(t.completedReaches) ? t.completedReaches : 0);
+      }, 0);
 
     if (saving) {
       const checkpoint = {
@@ -344,7 +348,7 @@ async function run(exp) {
 
     i += 1;
 
-    if (i < trials.length) {
+    if (i < trials.length && currentTrialSummary.skipRestAfter !== true) {
       ui.showScreen("screen-rest");
       ui.setText("#rest-progress", `${i} of ${trials.length} done`);
       await ui.waitForClick("#btn-next-trial");
