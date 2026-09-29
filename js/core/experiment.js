@@ -22,7 +22,7 @@ import * as fb from "./firebase.js?v=5183";
 import { getParticipant, getEnvironment, requestedExperiment } from "./participant.js";
 import * as ui from "./ui.js";
 
-const RUNNER_BUILD = "v5.18.5-bimanual-qc-split-20260929";
+const RUNNER_BUILD = "v5.18.6-bimanual-qc-split-20260929";
 
 function detectBrowserInfo() {
   const ua = navigator.userAgent || "";
@@ -70,7 +70,7 @@ export async function main() {
 
   let exp;
   try {
-    exp = (await import(`../../experiments/${name}.js?v=5185`)).default;
+    exp = (await import(`../../experiments/${name}.js?v=5186`)).default;
   } catch (err) {
     return ui.fatal(
       `Could not load the experiment "${name}".`,
