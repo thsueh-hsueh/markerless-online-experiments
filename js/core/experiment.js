@@ -22,7 +22,7 @@ import * as fb from "./firebase.js?v=5183";
 import { getParticipant, getEnvironment, requestedExperiment } from "./participant.js";
 import * as ui from "./ui.js";
 
-const RUNNER_BUILD = "v5.18.6-bimanual-qc-split-20260929";
+const RUNNER_BUILD = "v5.18.7-bimanual-qc-audit-20260929";
 
 function detectBrowserInfo() {
   const ua = navigator.userAgent || "";
@@ -70,7 +70,7 @@ export async function main() {
 
   let exp;
   try {
-    exp = (await import(`../../experiments/${name}.js?v=5186`)).default;
+    exp = (await import(`../../experiments/${name}.js?v=5187`)).default;
   } catch (err) {
     return ui.fatal(
       `Could not load the experiment "${name}".`,
@@ -292,13 +292,7 @@ async function run(exp) {
       executionIndex,
     }) ?? { action: "continue" };
 
-    const completedReachCount = trialSummaries
-      .filter((t) => isReachTrialSummary(t))
-      .reduce((sum, t) => {
-        if (Array.isArray(t.reaches)) return sum + t.reaches.length;
-        if (Number.isFinite(t.reachCount)) return sum + t.reachCount;
-        return sum + (Number.isFinite(t.completedReaches) ? t.completedReaches : 0);
-      }, 0);
+    const completedReachCount = countReachAttempts(trialSummaries);
 
     if (saving) {
       const checkpoint = {
@@ -387,6 +381,37 @@ async function run(exp) {
         }
       } catch (err) {
         console.warn("Could not confirm all technical-check data before termination:", err);
+      }
+    }
+    if (saving) {
+      const compactTerminationTrials = trialSummaries.map((t) => {
+        const { events, reaches, ...compact } = t;
+        return {
+          ...compact,
+          eventCount: Array.isArray(events) ? events.length : 0,
+          reachCount: Array.isArray(reaches) ? reaches.length : null,
+        };
+      });
+      try {
+        await fb.saveSessionCheckpoint(sessionId, {
+          status: termination.status,
+          failureReason: termination.failureReason,
+          termination,
+          completedReachCount: countReachAttempts(trialSummaries),
+          trials: compactTerminationTrials,
+          trialSummaryStorage: "trialSummaries_subcollection",
+          settings: { recording: RECORDING, trackerOptions: exp.trackerOptions ?? {} },
+          environment: {
+            ...getEnvironment(),
+            ...detectBrowserInfo(),
+            cameraWidth: cameraMeta.width,
+            cameraHeight: cameraMeta.height,
+            trackerDelegate: trackerMeta.delegate,
+            trackerErrors: trackerMeta.errorCount,
+          },
+        });
+      } catch (err) {
+        console.warn("Could not persist compact termination summary:", err);
       }
     }
     showTechnicalStop(termination);
@@ -493,9 +518,7 @@ async function run(exp) {
       lastCompletedBlock: trialSummaries
         .filter((t) => isReachTrialSummary(t) && t.blockFinishedNormally === true)
         .at(-1)?.id ?? null,
-      completedReachCount: trialSummaries
-        .filter((t) => isReachTrialSummary(t))
-        .reduce((sum, t) => sum + (Number.isFinite(t.completedReaches) ? t.completedReaches : 0), 0),
+      completedReachCount: countReachAttempts(trialSummaries),
     });
   }
 
@@ -1166,6 +1189,16 @@ function createUploadManager({ saving, sessionId, experimentId, trialCount }) {
 
 function isReachTrialSummary(t) {
   return t?.kind === "baseline_reaching" || t?.kind === "bimanual_reaching";
+}
+
+function countReachAttempts(summaries) {
+  return (summaries || [])
+    .filter((t) => isReachTrialSummary(t))
+    .reduce((sum, t) => {
+      if (Array.isArray(t.reaches)) return sum + t.reaches.length;
+      if (Number.isFinite(t.reachCount)) return sum + t.reachCount;
+      return sum + (Number.isFinite(t.completedReaches) ? t.completedReaches : 0);
+    }, 0);
 }
 
 function computeTreasureScore(summaries) {
