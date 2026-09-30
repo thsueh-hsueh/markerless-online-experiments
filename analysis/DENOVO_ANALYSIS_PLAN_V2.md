@@ -1,6 +1,6 @@
 # De Novo Analysis Plan V2
 
-Status: pilot-stage planned analysis for the v19-11 two-direction task.
+Status: pilot-stage planned analysis for the v19-12 two-direction task.
 
 Scope: acquisition, discovery versus implementation, movement-policy structure, hand coordination, explicit rule knowledge, and early post-baseline carryover. Novel-target transfer is intentionally deferred until acquisition is demonstrated in naive participants.
 
