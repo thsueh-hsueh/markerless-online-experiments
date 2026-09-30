@@ -65,7 +65,13 @@ ONSET_NOISE_WINDOW_MS = 300.0
 ONSET_NOISE_PERCENTILE = 95.0
 ONSET_SUBSTANTIAL_PEAK_FRACTION = 0.30
 ONSET_THRESHOLD_PEAK_FRACTION = 0.10
-DENOVO_IDS = ("denovo_discovery_1_50", "denovo_discovery_2_50")
+LEGACY_DENOVO_IDS = ("denovo_discovery_1_50", "denovo_discovery_2_50")
+BLOCKED_DENOVO_IDS = (
+    "denovo_blocked_1_50",
+    "denovo_blocked_2_50",
+    "denovo_blocked_3_50",
+    "denovo_blocked_4_50",
+)
 POST_ID = "baseline_post_20_aftereffect_no_feedback"
 
 
@@ -1069,7 +1075,12 @@ def main() -> None:
             if isinstance(trial, dict)
         }
 
-        for block_index, trial_id in enumerate(DENOVO_IDS):
+        if any(trial_id in trials_by_id for trial_id in BLOCKED_DENOVO_IDS):
+            denovo_ids = BLOCKED_DENOVO_IDS
+        else:
+            denovo_ids = LEGACY_DENOVO_IDS
+
+        for block_index, trial_id in enumerate(denovo_ids):
             trial = trials_by_id.get(trial_id)
             if trial:
                 denovo_rows.extend(
