@@ -7108,6 +7108,8 @@ function v20Style() {
     #bim-instruction-overlay[data-scene="formal"] {background:#101529f5}
     #bim-instruction-overlay .v20-copy {font-size:clamp(16px,2vw,21px);line-height:1.5;margin:10px 0;color:#e5f0f4}
     #bim-instruction-overlay .v20-demo {width:100%;height:auto;max-height:280px;margin:8px 0}
+    /* Fix only the Dynamic Check instruction: keep its native 800:270 aspect ratio. */
+    #bim-instruction-overlay[data-scene="setup"] .v20-demo {display:block;width:min(100%,800px);height:auto;max-height:none;aspect-ratio:800 / 270;margin:8px auto}
     #bim-instruction-overlay .bim-panel {max-height:94vh;overflow:auto}
     body[data-v20-scene="setup"] #stage {background:#0b1727}
     body[data-v20-scene="practice"] #stage {background:#071e26}
