@@ -7291,11 +7291,14 @@ function v20Frame(args) {
     } else {state.candidate=null;state.candidateFrames=0;}
   }
   const expired=state.moveAt==null?state.clock-state.targetAt>=V20_CONFIG.planningWindowMs:state.clock-state.moveAt>=V20_CONFIG.practiceMovementWindowMs;
-  if((radius>=TARGET_ECCENTRICITY && state.initial!=null)||expired) {
-    const angle=radius>0?angleDeg(task.x,task.y):null;
-    const error=angle==null?null:wrapAngleDeg(angle-targetAngleDeg(direction));
-    const correct=state.initial?.correct===true;
-    const endpointHit=!expired&&angularHitFromError(error);
+  const angle=radius>0?angleDeg(task.x,task.y):null;
+  const error=angle==null?null:wrapAngleDeg(angle-targetAngleDeg(direction));
+  const endpointHit=!expired&&radius>=TARGET_ECCENTRICITY&&angularHitFromError(error);
+  // The control check allows online corrections until a hit or the deadline.
+  // Initial hand/axis/direction remains recorded for analysis only.
+  const attemptComplete=trial.kind==='v20_gate'?endpointHit:(radius>=TARGET_ECCENTRICITY&&state.initial!=null);
+  if(attemptComplete||expired) {
+    const correct=trial.kind==='v20_gate'?endpointHit:state.initial?.correct===true;
     const record={index:state.index,targetDirection:direction,targetAngleDeg:targetAngleDeg(direction),requiredHand:rule.hand,
       initialChoice:state.initial,ruleCorrect:correct,endpointHit,timedOut:expired,endpointAngularErrorDeg:error,
       endpointTaskX:task.x,endpointTaskY:task.y,left:{...delta.Left},right:{...delta.Right},
