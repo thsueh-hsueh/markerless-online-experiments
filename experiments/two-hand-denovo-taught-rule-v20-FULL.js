@@ -11,6 +11,7 @@ if (typeof window !== "undefined") {
  * Active schedule is defined at the bottom of this file; baseline, mystery-zone
  * quiz and final explicit-rule probe are not scheduled.
  * Runner must support state.finished and qualityControl.evaluateTrial.
+ * V21: display/teaching redesign + endpoint-based control check.
  * Configure V20_CONFIG below before recruitment (partial-payment text and URL).
  */
 
@@ -715,7 +716,20 @@ function preloadTreasurePalmImage() {
 
 function drawOpenSourcePalm(ctx, cx, cy, size, hand = "Right", alpha = 1) {
   const img = preloadTreasurePalmImage();
-  if (!img || !img.complete || !img.naturalWidth) return false;
+  if (!img || !img.complete || !img.naturalWidth) {
+    // Keep calibration/instruction animations understandable even before the
+    // OpenMoji image is decoded or when its CDN is temporarily unavailable.
+    ctx.save();ctx.translate(cx,cy);if(hand==='Right')ctx.scale(-1,1);
+    ctx.scale(size/100,size/100);ctx.globalAlpha=alpha;
+    ctx.fillStyle='#ecf3ff';ctx.strokeStyle='#acc7ef';ctx.lineWidth=2;
+    ctx.shadowBlur=10;ctx.shadowColor='rgba(135,180,250,.24)';
+    const palm=(x,y,w,h,r)=>{ctx.beginPath();if(ctx.roundRect)ctx.roundRect(x,y,w,h,r);
+      else ctx.rect(x,y,w,h);ctx.fill();ctx.stroke();};
+    palm(-23,-11,46,46,14);
+    for(const [x,y,h] of [[-24,-40,37],[-12,-53,48],[0,-57,51],[12,-46,40]])palm(x,y,10,h,5);
+    ctx.save();ctx.translate(-24,8);ctx.rotate(-.55);palm(-12,-4,15,34,7);ctx.restore();
+    ctx.restore();return true;
+  }
   ctx.save();
   ctx.globalAlpha = alpha;
   ctx.translate(cx, cy);
@@ -728,9 +742,68 @@ function drawOpenSourcePalm(ctx, cx, cy, size, hand = "Right", alpha = 1) {
   return true;
 }
 
+/* V24: use a single demonstration time course for single- and two-hand intros.
+   Home -> LEFT -> Home -> UP is deliberately brief: all real directions
+   are still assessed in the subsequent two-hand movement check. */
+function v24CalibrationDemoMotion(elapsedMs) {
+  const t = clamp(elapsedMs / CALIBRATION_INTRO_MS, 0, 0.999999);
+  const path = [
+    {start:0.00, end:0.12, from:'home', to:'home'},
+    {start:0.12, end:0.32, from:'home', to:'left'},
+    {start:0.32, end:0.46, from:'left', to:'left'},
+    {start:0.46, end:0.64, from:'left', to:'home'},
+    {start:0.64, end:0.76, from:'home', to:'home'},
+    {start:0.76, end:0.94, from:'home', to:'up'},
+    {start:0.94, end:1.00, from:'up', to:'up'},
+  ];
+  const segment = path.find(s => t >= s.start && t < s.end) || path[path.length-1];
+  const raw = clamp((t-segment.start)/Math.max(1e-6,segment.end-segment.start),0,1);
+  const eased = segment.from === segment.to ? raw : 0.5-0.5*Math.cos(Math.PI*raw);
+  const hold = segment.from===segment.to && segment.from!=='home';
+  return {segment,raw,eased,hold,position:segment.to};
+}
+function v24CalibrationDemoPoint(hand, motion) {
+  const targets = CALIBRATION_TARGETS[hand];
+  const a = targets[motion.segment.from], b = targets[motion.segment.to];
+  return {x:a.x+(b.x-a.x)*motion.eased,y:a.y+(b.y-a.y)*motion.eased};
+}
+/* V25: This exact route is shared by the full both-hand calibration and its demo.
+   The demo takes the FIRST TWO directional targets (UP then DOWN) and returns HOME. */
+const V25_TWO_HAND_CALIBRATION_ROUTE = Object.freeze([
+  'home','up','home','down','home','left','home','right','home'
+]);
+/* V25: preview only the first TWO directions of the actual both-hand route.
+   Every outbound/return move uses the same ~0.94–1.04 s eased movement
+   as the single-hand calibration intro, so the palms do NOT speed up.
+   A single target (per hand) is active throughout each segment. */
+const V25_TWO_HAND_DEMO_STEPS = Object.freeze([
+  {from:V25_TWO_HAND_CALIBRATION_ROUTE[0],to:V25_TWO_HAND_CALIBRATION_ROUTE[0],durationMs:624},
+  {from:V25_TWO_HAND_CALIBRATION_ROUTE[0],to:V25_TWO_HAND_CALIBRATION_ROUTE[1],durationMs:1040},
+  {from:V25_TWO_HAND_CALIBRATION_ROUTE[1],to:V25_TWO_HAND_CALIBRATION_ROUTE[1],durationMs:850},
+  {from:V25_TWO_HAND_CALIBRATION_ROUTE[1],to:V25_TWO_HAND_CALIBRATION_ROUTE[2],durationMs:936},
+  {from:V25_TWO_HAND_CALIBRATION_ROUTE[2],to:V25_TWO_HAND_CALIBRATION_ROUTE[2],durationMs:624},
+  {from:V25_TWO_HAND_CALIBRATION_ROUTE[2],to:V25_TWO_HAND_CALIBRATION_ROUTE[3],durationMs:1040},
+  {from:V25_TWO_HAND_CALIBRATION_ROUTE[3],to:V25_TWO_HAND_CALIBRATION_ROUTE[3],durationMs:850},
+  {from:V25_TWO_HAND_CALIBRATION_ROUTE[3],to:V25_TWO_HAND_CALIBRATION_ROUTE[4],durationMs:936},
+  {from:V25_TWO_HAND_CALIBRATION_ROUTE[4],to:V25_TWO_HAND_CALIBRATION_ROUTE[4],durationMs:210},
+]);
+const V25_TWO_HAND_DEMO_MS = V25_TWO_HAND_DEMO_STEPS.reduce((ms,segment)=>ms+segment.durationMs,0);
+function v25TwoHandDemoMotion(elapsedMs) {
+  let elapsed=clamp(elapsedMs,0,V25_TWO_HAND_DEMO_MS-0.0001);
+  for(const segment of V25_TWO_HAND_DEMO_STEPS) {
+    if(elapsed < segment.durationMs) {
+      const raw=clamp(elapsed/segment.durationMs,0,1);
+      const eased=segment.from===segment.to?raw:demoEase01(raw);
+      const hold=segment.from===segment.to;
+      return {segment,raw,eased,hold,position:segment.to};
+    }
+    elapsed-=segment.durationMs;
+  }
+  const segment=V25_TWO_HAND_DEMO_STEPS[V25_TWO_HAND_DEMO_STEPS.length-1];
+  return {segment,raw:1,eased:1,hold:true,position:segment.to};
+}
 function drawCalibrationIntro(ctx, W, H, hand, elapsedMs) {
-  const total = CALIBRATION_INTRO_MS;
-  const t = clamp(elapsedMs / total, 0, 0.999999);
+  const motion = v24CalibrationDemoMotion(elapsedMs);
   ctx.save();
   ctx.fillStyle = "rgba(5,14,34,.93)";
   ctx.fillRect(0,0,W,H);
@@ -749,22 +822,8 @@ function drawCalibrationIntro(ctx, W, H, hand, elapsedMs) {
   const home = targets.home;
   const left = targets.left;
   const up = targets.up;
-  const path = [
-    { start: 0.00, end: 0.12, from: home, to: home },
-    { start: 0.12, end: 0.32, from: home, to: left },
-    { start: 0.32, end: 0.46, from: left, to: left },
-    { start: 0.46, end: 0.64, from: left, to: home },
-    { start: 0.64, end: 0.76, from: home, to: home },
-    { start: 0.76, end: 0.94, from: home, to: up },
-    { start: 0.94, end: 1.00, from: up, to: up },
-  ];
-  const seg = path.find(s => t >= s.start && t < s.end) || path[path.length - 1];
-  const raw = (t - seg.start) / Math.max(1e-6, seg.end - seg.start);
-  const q = (seg.from === seg.to)
-    ? raw
-    : (0.5 - 0.5*Math.cos(Math.PI*clamp(raw,0,1)));
-  const hx = (seg.from.x + (seg.to.x-seg.from.x)*q) * W;
-  const hy = (seg.from.y + (seg.to.y-seg.from.y)*q) * H;
+  const palm = v24CalibrationDemoPoint(hand,motion);
+  const hx = palm.x*W, hy=palm.y*H;
 
   ctx.strokeStyle = "rgba(141,188,255,.18)";
   ctx.lineWidth = 6;
@@ -1639,6 +1698,41 @@ function requestTreasureFullscreen() {
   document.documentElement.requestFullscreen().catch(() => {});
 }
 
+/* V24: fit the entire Camera check into the actual visible viewport.
+   The camera's native 4:3 aspect ratio is preserved; only its max WIDTH is
+   changed, and only while #screen-position is the active page. */
+let v24CameraFitQueued=false;
+function v24FitCameraCheck() {
+  if(typeof document==='undefined'||typeof window==='undefined')return;
+  const screen=document.getElementById('screen-position');
+  if(!screen||!screen.classList.contains('visible'))return;
+  const stage=screen.querySelector('#stage');
+  const continueButton=screen.querySelector('#btn-position-done');
+  if(!stage||!continueButton)return;
+  const viewportH=window.visualViewport?.height||window.innerHeight;
+  const viewportW=window.visualViewport?.width||window.innerWidth;
+  let width=Math.max(150,Math.min(700,viewportW*.92,(viewportH-280)*4/3));
+  screen.style.setProperty('--camera-v24-preview-width',`${Math.round(width)}px`);
+  let iteration=0;
+  function checkFit() {
+    if(!screen.classList.contains('visible'))return;
+    const stageRect=stage.getBoundingClientRect();
+    const buttonBottom=continueButton.getBoundingClientRect().bottom;
+    const excess=buttonBottom-(viewportH-12);
+    if(excess>1&&iteration++<4&&stageRect.width>150&&stageRect.height>0) {
+      width=Math.max(150,width-excess*(stageRect.width/stageRect.height)-10);
+      screen.style.setProperty('--camera-v24-preview-width',`${Math.round(width)}px`);
+      window.requestAnimationFrame(checkFit);
+    }
+  }
+  window.requestAnimationFrame(checkFit);
+}
+function v24QueueCameraFit() {
+  if(typeof window==='undefined'||v24CameraFitQueued)return;
+  v24CameraFitQueued=true;
+  window.requestAnimationFrame(()=>{v24CameraFitQueued=false;v24FitCameraCheck();});
+}
+
 function setupTreasureShellUi() {
   if (typeof document === "undefined") return;
   preloadTreasurePalmImage();
@@ -1661,13 +1755,21 @@ function setupTreasureShellUi() {
     #screen-instructions.visible { opacity:0 !important; pointer-events:none !important; }
     body:has(#screen-trial.visible),
     body:has(#screen-rest.visible) { overflow-y:hidden; }
-    body:has(#screen-position.visible) main { max-width:900px; width:min(96vw,900px); }
+    body:has(#screen-position.visible) main { max-width:1040px; width:min(98vw,1040px); }
     #screen-position { text-align:center; min-height:100dvh; box-sizing:border-box; padding-bottom:86px; }
     #screen-position > h2 { font-size:2rem; margin:8px 0 2px; }
     #screen-position .camera-performance-reminder { display:none !important; }
+    /* The runner's global progress may remain visible under Camera check;
+       it is unrelated to hand detection and looks like a green bottom strip. */
+    body:has(#screen-position.visible) #screen-position .progress,
+    body:has(#screen-position.visible) #screen-position progress,
+    body:has(#screen-position.visible) #screen-position .progress-bar,
+    body:has(#screen-position.visible) main > .progress,
+    body:has(#screen-position.visible) #app > .progress {display:none !important;}
+    /* Keep the real palm-landmark preview visible; only hide redundant chrome. */
     #screen-position #position-stage-slot { margin-top:8px; }
     body:has(#screen-position.visible) #stage {
-      width:min(92vw,680px,calc((100dvh - 300px) * 4 / 3));
+      width:min(96vw,800px,calc((100dvh - 205px) * 4 / 3));
       max-width:100%; margin:6px auto 8px; border-radius:18px;
       box-shadow:0 18px 52px rgba(0,0,0,.28);
     }
@@ -1676,7 +1778,7 @@ function setupTreasureShellUi() {
     body:has(#screen-position.visible) #countdown { display:none !important; }
 
     #treasure-camera-cue {
-      width:min(96vw,900px); box-sizing:border-box; margin:8px auto 10px; padding:9px 12px;
+      width:min(96vw,820px); box-sizing:border-box; margin:4px auto 6px; padding:6px 12px;
       border-radius:18px; background:rgba(18,36,65,.34);
       border:1px solid rgba(145,190,246,.12); box-shadow:0 10px 28px rgba(0,0,0,.13);
     }
@@ -1713,11 +1815,11 @@ function setupTreasureShellUi() {
 
     #position-status { min-height:1.5em; margin:6px 0 2px; font-size:1.02rem; }
     #treasure-camera-mainrow {
-      width:min(96vw,900px); margin:5px auto 7px; display:flex;
+      width:min(98vw,880px); margin:3px auto 6px; display:flex;
       flex-direction:column; align-items:center; gap:10px;
     }
     #screen-position .treasure-camera-actions {
-      width:min(100%,620px); display:flex; justify-content:center; margin:2px auto 0;
+      width:min(100%,800px); display:flex; justify-content:center; margin:1px auto 0;
       position:static; z-index:1; padding:0; border-radius:0; background:transparent;
       backdrop-filter:none; -webkit-backdrop-filter:none;
     }
@@ -1726,10 +1828,10 @@ function setupTreasureShellUi() {
       font-weight:900; letter-spacing:.01em;
       box-shadow:0 8px 22px rgba(52,118,255,.22);
     }
-    #treasure-camera-mainrow #position-stage-slot { width:min(100%,620px); min-width:0; margin:0 auto; }
-    #treasure-camera-mainrow #stage { width:min(100%,620px,calc((100dvh - 285px) * 4 / 3)); margin:0 auto; }
+    #treasure-camera-mainrow #position-stage-slot { width:min(100%,800px); min-width:0; margin:0 auto; }
+    #treasure-camera-mainrow #stage { width:min(100%,800px,calc((100dvh - 215px) * 4 / 3)); margin:0 auto; }
     #treasure-camera-tips {
-      width:min(100%,620px); margin:2px auto 0; display:grid !important;
+      width:min(100%,800px); margin:2px auto 0; display:grid !important;
       grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; align-items:stretch;
     }
     #treasure-camera-tips .tip {
@@ -1754,7 +1856,7 @@ function setupTreasureShellUi() {
       #treasure-camera-cue .camera-note { display:none; }
       #treasure-camera-cue .camera-hero { min-height:78px; }
       #treasure-camera-cue .camera-demo { height:72px; }
-      #treasure-camera-mainrow #stage { width:min(100%,560px,calc((100dvh - 215px) * 4 / 3)); }
+      #treasure-camera-mainrow #stage { width:min(100%,730px,calc((100dvh - 205px) * 4 / 3)); }
     }
     @media (max-height:640px) {
       #screen-position > h2 { font-size:1.55rem; }
@@ -1762,8 +1864,36 @@ function setupTreasureShellUi() {
       #treasure-camera-cue .camera-hero { grid-template-columns:1fr; min-height:0; }
       #treasure-camera-cue .camera-copy { text-align:center; padding-left:0; }
       #treasure-camera-cue .camera-demo { display:none; }
-      body:has(#screen-position.visible) #stage { width:min(88vw,500px,calc((100dvh - 170px) * 4 / 3)); }
+      #treasure-camera-mainrow #stage { width:min(96vw,660px,calc((100dvh - 165px) * 4 / 3)); }
     }
+
+    /* V24: Camera check must show detection, preview, tips, and Continue without
+       vertical scrolling; leave a viewport margin for the runner header. */
+    body:has(#screen-position.visible) {overflow-y:hidden !important;}
+    #screen-position.visible {min-height:0!important;padding-bottom:8px!important;}
+    #screen-position.visible > h2 {font-size:clamp(1.25rem,2.8vh,1.7rem);margin:2px 0 3px;}
+    #treasure-camera-cue {margin:2px auto 3px!important;padding:4px 10px!important;}
+    #treasure-camera-cue .camera-hero {min-height:57px;gap:10px;}
+    #treasure-camera-cue .camera-demo {height:55px;}
+    #treasure-camera-cue .camera-title {font-size:1.2rem;}
+    #treasure-camera-cue .camera-sub {font-size:.82rem;margin-top:2px;}
+    #position-status {min-height:1.1em;margin:2px 0!important;font-size:.92rem;}
+    #treasure-camera-mainrow {gap:5px;margin:1px auto 3px!important;}
+    #treasure-camera-mainrow #stage {
+      width:min(94vw,700px,var(--camera-v24-preview-width,610px))!important;
+      max-width:100%;margin:0 auto!important;
+    }
+    #treasure-camera-tips {gap:5px;margin:1px auto 0!important;}
+    #treasure-camera-tips .tip {min-height:32px;padding:5px 7px;font-size:.76rem;}
+    #screen-position .treasure-camera-actions button {min-height:42px;}
+    @media(max-height:720px) {
+      #treasure-camera-cue .camera-demo {display:none!important;}
+      #treasure-camera-cue .camera-hero {grid-template-columns:1fr;min-height:42px;}
+      #treasure-camera-cue .camera-copy {text-align:center;padding-left:0;}
+      #treasure-camera-tips .tip {min-height:28px;padding:3px 5px;}
+      #screen-position .treasure-camera-actions button {min-height:38px;}
+    }
+    @media(max-height:540px) {#treasure-camera-tips {display:none!important;}}
 
     body.treasure-reaching-active #stage,
     body.treasure-reaching-active #stage *,
@@ -1932,6 +2062,7 @@ function setupTreasureShellUi() {
       row.appendChild(cameraTips);
       if (cameraActions) row.appendChild(cameraActions);
     }
+    v24QueueCameraFit();
   }
 
   /* The standalone setup-instructions page was redundant with the calibration
@@ -2334,6 +2465,8 @@ if (typeof document !== "undefined") {
 
   const startTreasureShellObserver = () => {
     queueTreasureShellApply();
+    window.addEventListener('resize',v24QueueCameraFit,{passive:true});
+    window.visualViewport?.addEventListener('resize',v24QueueCameraFit,{passive:true});
 
     const root = document.documentElement || document.body;
     if (!root || typeof MutationObserver === "undefined") return;
@@ -2357,6 +2490,7 @@ if (typeof document !== "undefined") {
 
       const position = document.getElementById("screen-position");
       if (!position) return;
+      v24QueueCameraFit();
 
       /* Reapply if the runner has just created/replaced the camera DOM or if
          any piece of our custom shell is missing. */
@@ -6981,8 +7115,9 @@ const legacyExperiment = {
     return {};
   },
 };
-/* ================= V20 ACTIVE PROTOCOL =================
- * Editing these settings does not change the original formal controller.
+/* ================= V22 UI REFINEMENT / V20 ACTIVE PROTOCOL =================
+ * V22 modifies visual presentation only; the original formal controller and
+ * V21 endpoint-based control-check scoring remain unchanged.
  * Compensation is NOT automatically issued by this client-side script.
  * Default exit opens Prolific in a separate tab, preserving saved experiment
  * data. Set a study-specific exit URL if needed; no completion code is invented.
@@ -6997,6 +7132,8 @@ const V20_CONFIG = Object.freeze({
   practiceMovementWindowMs: 5000,
   gateMovementWindowMs: 15000, // Control Check only; timer starts at first detected movement.
   planningWindowMs: 15000,
+  stageSafetyDurationSec: 300, // Keep the existing single-hand practice stage limit.
+  dynamicDemoMs: V25_TWO_HAND_DEMO_MS, // Full-screen teaching demo only.
   trackingFailureMs: 15000,
   dynamicMaxSec: 150,
   initialDirectionThreshold: 0.08,
@@ -7029,52 +7166,47 @@ const V20_RULES={
   down:{hand:'Right',axis:'x',sign:1,handWord:'RIGHT',arrow:'→'},
 };
 const V20_CARDINAL=['right','left','up','down'];
-function v20Page(id, title, lines, demo=null, scene='practice') {
-  return {...bimanualInstructionTrial(id,'v20'),v20:true,title,lines,demo,scene};
+function v20Page(id, title, lines, demo=null, scene='practice', autoAdvance=false) {
+  return {...bimanualInstructionTrial(id,'v20'),v20:true,title,lines,demo,scene,autoAdvance};
 }
 function v20Practice(hand,guided) {
   const pool=hand==='Left'?['right','left']:['up','down'];
   return {id:`v20_${hand.toLowerCase()}_${guided?'guided':'independent'}`,kind:'v20_practice',hand,guided,
-    sequence:v20BalancedSequence(pool,4),scene:'practice',showCamera:false,durationSec:300,countdownSec:0,prompt:''};
+    sequence:v20BalancedSequence(pool,4),scene:'practice',showCamera:false,durationSec:V20_CONFIG.stageSafetyDurationSec,countdownSec:0,prompt:''};
 }
 const v20Trials=[
   ...['Left','Right'].map(hand=>({id:`cal_${hand.toLowerCase()}_continuous`,kind:'continuous_calibration',hand,
     scene:'setup',showCamera:true,durationSec:CALIBRATION_MAX_SEC,countdownSec:0,prompt:`Movement setup · ${hand.toUpperCase()} HAND`})),
-  v20Page('v20_dynamic_intro','Movement check · BOTH HANDS',[
-    'Move both hands to the glowing circles and hold still.'
-  ],'dynamic','setup'),
+  v20Page('v20_dynamic_intro','TWO HANDS CALIBRATION',[
+    'Move both hands to each glowing circle and hold still.'
+  ],'dynamic','setup',true),
   {id:'v20_dynamic_four',kind:'v20_dynamic',scene:'setup',showCamera:true,durationSec:V20_CONFIG.dynamicMaxSec,countdownSec:0,prompt:''},
-  v20Page('v20_training_intro','Learn the controls',[
-    'You will use both hands to control one cursor and collect gems.',
+  v20Page('v20_training_intro',"Let's learn the controls",[
+    "Let's learn how your hands control the cursor.",
     'First, practice with each hand separately.'
   ]),
-  v20Page('v20_left_intro','LEFT HAND PRACTICE',[
-    'Your left hand controls the cursor’s left–right movement.',
+  v20Page('v20_left_intro',"Let's start with your left hand",[
     'Move your left hand UP to move the cursor RIGHT.',
-    'Move your left hand DOWN to move the cursor LEFT.',
-    'Follow the arrow to move your hand and guide the cursor toward the gem.'
+    'Move your left hand DOWN to move the cursor LEFT.'
   ],'Left'),
   v20Practice('Left',true),
-  v20Page('v20_left_no_arrow','LEFT HAND PRACTICE',['Now try without the arrow.']),
+  v20Page('v20_left_no_arrow','YOUR LEFT HAND',['Now try without the hints.']),
   v20Practice('Left',false),
-  v20Page('v20_right_intro','RIGHT HAND PRACTICE',[
-    'Your right hand controls the cursor’s up–down movement.',
+  v20Page('v20_right_intro',"Now, let's try your right hand",[
     'Move your right hand LEFT to move the cursor UP.',
-    'Move your right hand RIGHT to move the cursor DOWN.',
-    'Follow the arrow to move your hand and guide the cursor toward the gem.'
+    'Move your right hand RIGHT to move the cursor DOWN.'
   ],'Right'),
   v20Practice('Right',true),
-  v20Page('v20_right_no_arrow','RIGHT HAND PRACTICE',['Now try without the arrow.']),
+  v20Page('v20_right_no_arrow','YOUR RIGHT HAND',['Now try without the hints.']),
   v20Practice('Right',false),
-  v20Page('v20_gate_intro','Control check',[
+  v20Page('v20_gate_intro',"Let's see what you've learned!",[
     'Use the rules you learned to reach each gem.',
-    'You may change direction or try another movement until the cursor touches the gem.',
-    'You have 15 seconds to start moving, then 15 seconds to reach the gem.'
+    'You may change direction or try another movement until the cursor touches the gem.'
   ]),
   {id:'v20_control_gate',kind:'v20_gate',scene:'practice',sequence:v20BalancedSequence(V20_CARDINAL,6),showCamera:false,durationSec:1200,countdownSec:0,prompt:''},
-  v20Page('v20_formal_intro','Collect the gem',[
-    'Use the rules you learned to control the cursor with both hands and collect the gems.',
-    'Make one quick movement toward each gem.'
+  v20Page('v20_formal_intro','Ready to collect the gems?',[
+    'Use both hands to control the cursor.',
+    'Make one outward movement toward each gem.'
   ],null,'formal'),
 ];
 for(let block=0;block<4;block++) {
@@ -7086,34 +7218,131 @@ for(let block=0;block<4;block++) {
 }
 
 function v20Scene(ctx,W,H,scene) {
-  const colors=scene==='setup'?['#1c3246','#0b1727']:scene==='practice'?['#103e3c','#071e26']:['#242447','#101529'];
-  const gradient=ctx.createLinearGradient(0,0,W,H);
-  gradient.addColorStop(0,colors[0]);gradient.addColorStop(1,colors[1]);
-  ctx.fillStyle=gradient;ctx.fillRect(0,0,W,H);
-  ctx.save();ctx.strokeStyle=scene==='practice'?'#407f79':'#516180';ctx.globalAlpha=.22;ctx.lineWidth=1;
-  // Fixed edge decoration: no motion or lines behind the gems.
-  for(let n=0;n<4;n++) {ctx.strokeRect(12+n*7,12+n*7,W-24-n*14,H-24-n*14);}
-  ctx.restore();
+  // Shared navy-and-gold visual system across setup, teaching, and formal task.
+  const g=ctx.createRadialGradient(W*.5,H*.42,Math.min(W,H)*.05,W*.5,H*.5,Math.max(W,H)*.68);
+  g.addColorStop(0,'#182d4c');g.addColorStop(.58,'#0d1d35');g.addColorStop(1,'#071225');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  // Intentionally no inset rectangles: one full-bleed demonstration surface.
 }
 function v20Progress(ctx,W,H,value) {
-  const p=clamp(value,0,1),width=Math.min(150,W*.18),x=W-width-24,y=25;
-  ctx.save();ctx.fillStyle='#ffffff22';ctx.fillRect(x,y,width,6);ctx.fillStyle='#9de6d3';ctx.fillRect(x,y,width*p,6);
-  ctx.fillStyle='#e9f5fa';ctx.textAlign='right';ctx.font='600 16px system-ui';ctx.fillText(`${Math.floor(p*100)}%`,W-24,y+26);ctx.restore();
+  // Kept as a minimal no-bar fallback; the primary progress is the numeric DOM badge.
+  ctx.save();ctx.fillStyle='#f7e6b6';ctx.textAlign='right';
+  ctx.font='850 20px system-ui';ctx.fillText(`${Math.floor(clamp(value,0,1)*100)}%`,W-28,35);ctx.restore();
+}
+/* V23 preserves V22 progress: overall experimental completion, including calibration and
+   teaching; formal reaches account for the final 85 percentage points. */
+function v22OverallFraction(trial,state) {
+  const firstFormal=v20Trials.findIndex(t=>t.v20Formal);
+  const index=v20Trials.findIndex(t=>t.id===trial?.id);
+  if(trial?.v20Formal) {
+    const reaches=(trial.visualReachOffset||0)+(state?.reaches?.length||0);
+    return .15+.85*clamp(reaches/240,0,1);
+  }
+  const breakMatch=/^v20_break_(\d+)$/.exec(trial?.id||'');
+  if(breakMatch)return .15+.85*(Number(breakMatch[1])*60/240);
+  if(index>=0&&index<firstFormal) {
+    let progress=0;
+    if(trial?.kind==='v20_dynamic')progress=(state?.step||0)/V25_TWO_HAND_CALIBRATION_ROUTE.length;
+    else if(trial?.kind==='v20_practice')progress=(state?.index||0)/(trial.sequence?.length||1);
+    else if(trial?.kind==='v20_gate')progress=(state?.index||0)/V20_CONFIG.gateMaxAttempts;
+    else if(trial?.kind==='continuous_calibration')progress=(state?.calibrationComplete?1:0);
+    return .15*clamp((index+progress)/Math.max(1,firstFormal),0,1);
+  }
+  return .15;
+}
+function v22ShowPercent(trial,state) {
+  if(typeof document==='undefined')return;
+  let badge=document.getElementById('v22-study-percent');
+  if(!badge){badge=document.createElement('div');badge.id='v22-study-percent';
+    badge.setAttribute('aria-label','Study progress');document.body.appendChild(badge);}
+  const label=`${Math.floor(v22OverallFraction(trial,state)*100+1e-7)}%`;
+  if(badge.textContent!==label)badge.textContent=label;
 }
 function v20Style() {
   if(document.getElementById('v20-style')) return;
   const style=document.createElement('style');style.id='v20-style';style.textContent=`
-    #bim-instruction-overlay[data-scene="setup"] {background:#0b1727f5}
-    #bim-instruction-overlay[data-scene="practice"] {background:#071e26f5}
-    #bim-instruction-overlay[data-scene="formal"] {background:#101529f5}
-    #bim-instruction-overlay .v20-copy {font-size:clamp(16px,2vw,21px);line-height:1.5;margin:10px 0;color:#e5f0f4}
-    #bim-instruction-overlay .v20-demo {width:100%;height:auto;max-height:280px;margin:8px 0}
-    /* Fix only the Dynamic Check instruction: keep its native 800:270 aspect ratio. */
-    #bim-instruction-overlay[data-scene="setup"] .v20-demo {display:block;width:min(100%,800px);height:auto;max-height:none;aspect-ratio:800 / 270;margin:8px auto}
-    #bim-instruction-overlay .bim-panel {max-height:94vh;overflow:auto}
-    body[data-v20-scene="setup"] #stage {background:#0b1727}
-    body[data-v20-scene="practice"] #stage {background:#071e26}
-    body[data-v20-scene="formal"] #stage {background:#101529}
+    #bim-instruction-overlay[data-scene] {background:radial-gradient(circle at 50% 30%,#182e4c,#071225 75%)}
+    #bim-instruction-overlay .bim-panel {width:min(1080px,94vw);padding:clamp(18px,3vw,38px);border-radius:24px;
+      background:rgba(9,22,42,.97);border:1px solid rgba(224,193,115,.23)}
+    #bim-instruction-overlay h2 {font-size:clamp(1.9rem,4vw,3.2rem);line-height:1.15;margin-bottom:18px}
+    #bim-instruction-overlay .v20-copy {font-size:clamp(17px,2vw,23px);line-height:1.45;
+      margin:12px auto;text-align:center;max-width:920px;color:#e8edf7}
+    #bim-instruction-overlay .v20-demo {display:block;width:100%;height:auto;aspect-ratio:2/1;
+      max-height:min(58vh,520px);object-fit:contain;margin:8px auto 18px;border-radius:16px;
+      border:1px solid rgba(226,195,125,.20)}
+    #bim-instruction-overlay .bim-panel {max-height:95dvh;overflow:auto}
+    /* V22: demonstration itself occupies the whole viewport like calibration.
+       No inner animation card, frame, or squashed half-height canvas. */
+    #bim-instruction-overlay.v22-immersive {padding:0;overflow:hidden;align-items:stretch;justify-content:stretch}
+    #bim-instruction-overlay.v22-immersive .bim-panel {
+      width:100vw;max-width:none;height:100dvh;max-height:none;padding:clamp(12px,2.6vh,28px) 4vw;
+      box-sizing:border-box;border:0;border-radius:0;background:transparent;box-shadow:none;
+      overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;
+      position:relative;isolation:isolate;
+    }
+    #bim-instruction-overlay.v22-immersive .v20-demo {
+      position:absolute;inset:0;width:100%;height:100%;max-height:none;aspect-ratio:auto;
+      object-fit:contain;margin:0;border:0;border-radius:0;z-index:0;pointer-events:none;
+    }
+    #bim-instruction-overlay.v22-immersive h2 {
+      position:relative;z-index:1;flex-shrink:0;align-self:center;
+      margin:clamp(6px,2vh,18px) auto auto;
+      font-size:clamp(1.75rem,3.5vw,3.6rem);text-shadow:0 4px 18px rgba(0,0,0,.36);
+    }
+    #bim-instruction-overlay.v22-immersive .v20-copy {
+      position:relative;z-index:1;flex-shrink:0;line-height:1.34;
+      font-size:clamp(14px,1.7vw,21px);margin:3px auto;
+      text-shadow:0 3px 14px rgba(0,0,0,.52);
+    }
+    /* Same visual language as drawCalibrationIntro(): off-white bold heading,
+       dark navy full screen, pale subtitle, warm-yellow bottom instruction. */
+    #bim-instruction-overlay.v23-calibration { background:#061024; }
+    #bim-instruction-overlay.v23-calibration h2 {
+      color:#f6f9ff;font:900 clamp(27px,5.5vmin,52px)/1.15 system-ui,sans-serif;
+      letter-spacing:0;text-align:center;
+    }
+    #bim-instruction-overlay.v23-calibration .v20-copy {
+      color:#ffe39a;font-weight:800;font-size:clamp(14px,2.5vmin,22px);
+      margin-bottom:clamp(15px,6vh,65px);
+    }
+    #bim-instruction-overlay.v22-immersive .bim-main-button {
+      position:relative;z-index:1;flex-shrink:0;margin:clamp(8px,1.4vh,16px) auto clamp(8px,1.2vh,14px);
+      min-width:min(260px,45vw);
+    }
+    @media(max-height:620px) {
+      #bim-instruction-overlay.v22-immersive h2 {font-size:clamp(1.6rem,3vw,2.8rem);margin-top:0}
+      #bim-instruction-overlay.v22-immersive .v20-copy {font-size:14px;margin:1px auto}
+      #bim-instruction-overlay.v22-immersive .bim-main-button {min-height:40px;margin:6px auto 0}
+    }
+    /* Global runner counters remain hidden; one unobtrusive numeric percentage is shown. */
+    body[data-v20-scene] #screen-trial > .progress,
+    body[data-v20-scene] #screen-trial .trial-progress,
+    body[data-v20-scene] #screen-trial .trial-counter,
+    body[data-v20-scene] #trial-progress,
+    body[data-v20-scene] #trial-counter {display:none !important}
+    #v22-study-percent {position:fixed;top:clamp(10px,1.6vh,20px);right:clamp(12px,2.1vw,32px);
+      z-index:100090;pointer-events:none;color:#f7e6b6;
+      font:850 clamp(15px,1.7vw,23px)/1 system-ui,sans-serif;
+      text-shadow:0 2px 14px rgba(0,0,0,.75);font-variant-numeric:tabular-nums}
+
+    #bim-instruction-overlay .bim-main-button {background:#304f76;border-color:#bfa76e;min-height:52px;margin-top:20px}
+    body[data-v20-scene] #stage {background:#09172b}
+    /* Hide the OS pointer only during actual motion checks and reaching, not on instruction buttons. */
+    body[data-v20-task="v20_dynamic"] #stage, body[data-v20-task="v20_dynamic"] #stage *,
+    body[data-v20-task="v20_practice"] #stage, body[data-v20-task="v20_practice"] #stage *,
+    body[data-v20-task="v20_gate"] #stage, body[data-v20-task="v20_gate"] #stage * {cursor:none !important}
+    /* Do not display runner trial counters in the bimanual movement check. */
+    body[data-v20-task="v20_dynamic"] .trial-progress,
+    body[data-v20-task="v20_dynamic"] .trial-counter,
+    body[data-v20-task="v20_dynamic"] #trial-progress,
+    body[data-v20-task="v20_dynamic"] #trial-counter {display:none !important}
+    /* Runner-wide remaining-time labels are not a response deadline for practice/check stages. */
+    body[data-v20-task="v20_practice"] #trial-timer,
+    body[data-v20-task="v20_gate"] #trial-timer,
+    body[data-v20-task="v20_practice"] .trial-timer,
+    body[data-v20-task="v20_gate"] .trial-timer,
+    body[data-v20-task="v20_practice"] .time-remaining,
+    body[data-v20-task="v20_gate"] .time-remaining {display:none !important}
   `;document.head.appendChild(style);
 }
 function v20Arrow(ctx,x,y,dx,dy,color='#ffd77c') {
@@ -7123,56 +7352,120 @@ function v20Arrow(ctx,x,y,dx,dy,color='#ffd77c') {
   ctx.lineTo(x+dx-15*Math.cos(a-.5),y+dy-15*Math.sin(a-.5));ctx.lineTo(x+dx-15*Math.cos(a+.5),y+dy-15*Math.sin(a+.5));ctx.closePath();ctx.fill();ctx.restore();
 }
 function v20Demo(canvas,demo,t) {
-  const ctx=canvas.getContext('2d'),W=800,H=270;canvas.width=W;canvas.height=H;
-  v20Scene(ctx,W,H,demo==='dynamic'?'setup':'practice');
-  ctx.font='600 18px system-ui';ctx.textAlign='center';ctx.fillStyle='#edf5ff';
+  const ctx=canvas.getContext('2d');
+  const W=Math.round(canvas.clientWidth||window.innerWidth||1280);
+  const H=Math.round(canvas.clientHeight||window.innerHeight||720);
+  if(canvas.width!==W)canvas.width=W;
+  if(canvas.height!==H)canvas.height=H;
   if(demo==='dynamic') {
-    const dirs=[[0,-1],[0,1],[-1,0],[1,0]],cycle=(t/2600)%4,d=dirs[Math.floor(cycle)],f=cycle%1;
-    const travel=f<.28?f/.28:f<.60?1:f<.88?1-(f-.60)/.28:0;
-    for(const [hand,x] of [['Left',220],['Right',580]]) {
-      const y=135,tx=x+d[0]*100,ty=y+d[1]*70;
-      drawCalibrationBeacon(ctx,tx,ty,22,'target',f>=.28&&f<.60,clamp((f-.28)/.32,0,1)*100,t);
-      drawOpenSourcePalm(ctx,x+d[0]*100*travel,y+d[1]*70*travel,65,hand,1);
-    }
-    ctx.fillText(['UP','DOWN','LEFT','RIGHT'][Math.floor(cycle)],400,37);
+    // Match the full-screen, dark-navy single-hand calibration intro.
+    ctx.fillStyle='#061024';
+    ctx.fillRect(0,0,W,H);
   } else {
-    const up=(Math.floor(t/2800)%2)===0,phase=(t%2800)/2800,amount=Math.sin(Math.PI*phase)**2;
-    const hand=demo,sign=up?-1:1,dx=hand==='Right'?sign*75:0,dy=hand==='Left'?sign*60:0;
-    ctx.fillText(`${hand.toUpperCase()} HAND`,210,32);ctx.fillText('CURSOR',595,32);
-    drawOpenSourcePalm(ctx,210+dx*amount,150+dy*amount,75,hand,1);
-    v20Arrow(ctx,310,150,hand==='Right'?sign*52:0,hand==='Left'?sign*52:0);
-    const cx=hand==='Left'?-sign*100:0,cy=hand==='Right'?sign*75:0;
-    drawGem(ctx,595+cx,150+cy,15,1,t);drawTreasureCompassCursor(ctx,595+cx*amount,150+cy*amount);
+    v20Scene(ctx,W,H,'practice');
   }
+  const scale=Math.min(W,H);
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  if(demo==='dynamic') {
+    const motion=v25TwoHandDemoMotion(t);
+    const target=motion.position;
+    const heading=motion.hold
+      ? (target==='home'?'Place both hands in the starting circles':'Hold still')
+      : (target==='home'?'Return both hands to the starting circles':`Move both hands ${target.toUpperCase()}`);
+    ctx.fillStyle='#b9c9df';
+    ctx.font=`700 ${Math.round(scale*.031)}px system-ui,sans-serif`;
+    ctx.fillText(heading,W/2,H*.205);
+    // Match the REAL two-hand check: draw ONLY the current directional target,
+    // one ring for each hand. Never show HOME plus another direction together.
+    for(const hand of ['Left','Right']) {
+      const anchor=CALIBRATION_TARGETS[hand][target];
+      drawCalibrationBeacon(ctx,anchor.x*W,anchor.y*H,scale*.038,target,
+        motion.hold, motion.hold?motion.raw*100:0,t);
+      const palm=v24CalibrationDemoPoint(hand,motion);
+      drawOpenSourcePalm(ctx,palm.x*W,palm.y*H,scale*.15,hand,1);
+    }
+    return;
+  }
+  // Occupy the full screen, but protect an independent area for each cause/effect.
+  // The cursor never enters the hand's space (and neither overlaps text labels).
+  const hand=demo,option=Math.floor(t/3600)%2,phase=(t%3600)/3600;
+  const amount=phase<.20?0:phase<.50?(1-Math.cos(Math.PI*(phase-.20)/.30))/2:
+    phase<.67?1:phase<.92?(1+Math.cos(Math.PI*(phase-.67)/.25))/2:0;
+  const handDirection=hand==='Left'?(option===0?'UP':'DOWN'):(option===0?'LEFT':'RIGHT');
+  const cursorDirection=hand==='Left'?(option===0?'RIGHT':'LEFT'):(option===0?'UP':'DOWN');
+  const handStart={x:W*.26,y:H*.58},cursorStart={x:W*.72,y:H*.58};
+  const handShift={x:hand==='Right'?(option===0?-W*.105:W*.105):0,
+                   y:hand==='Left'?(option===0?-H*.14:H*.14):0};
+  const cursorShift={x:hand==='Left'?(option===0?W*.115:-W*.115):0,
+                     y:hand==='Right'?(option===0?-H*.14:H*.14):0};
+  // Each column stays independent; visual association comes from synchronous motion.
+  ctx.save();ctx.strokeStyle='rgba(210,224,245,.13)';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(W*.50,H*.28);ctx.lineTo(W*.50,H*.80);ctx.stroke();ctx.restore();
+  ctx.fillStyle='#f4f6fb';ctx.font=`850 ${Math.round(scale*.043)}px system-ui`;
+  ctx.fillText(`YOUR ${hand.toUpperCase()} HAND`,handStart.x,H*.26);
+  ctx.fillText('THE CURSOR',cursorStart.x,H*.26);
+  ctx.fillStyle='#e8cb89';ctx.font=`750 ${Math.round(scale*.034)}px system-ui`;
+  ctx.fillText(`MOVE ${handDirection}`,handStart.x,H*.33);
+  ctx.fillText(`MOVES ${cursorDirection}`,cursorStart.x,H*.33);
+  ctx.save();ctx.setLineDash([8,12]);ctx.lineWidth=3;ctx.strokeStyle='rgba(224,233,245,.20)';
+  ctx.beginPath();ctx.moveTo(handStart.x,handStart.y);
+  ctx.lineTo(handStart.x+handShift.x,handStart.y+handShift.y);
+  ctx.moveTo(cursorStart.x,cursorStart.y);
+  ctx.lineTo(cursorStart.x+cursorShift.x,cursorStart.y+cursorShift.y);ctx.stroke();ctx.restore();
+  drawCalibrationBeacon(ctx,handStart.x,handStart.y,scale*.052,'home',false,0,t);
+  drawOpenSourcePalm(ctx,handStart.x+handShift.x*amount,handStart.y+handShift.y*amount,
+                     scale*.15,hand,1);
+  const cursorX=cursorStart.x+cursorShift.x*amount,cursorY=cursorStart.y+cursorShift.y*amount;
+  drawTreasureCompassCursor(ctx,cursorX,cursorY);
+  const gx=cursorStart.x+cursorShift.x,gy=cursorStart.y+cursorShift.y;
+  if(!(phase>=.50&&phase<.67))drawGem(ctx,gx,gy,scale*.043,4,t);
+  else drawCollectSparkle(ctx,gx,gy,Math.min(GEM_SPARKLE_MS,(phase-.50)*3600));
 }
 function v20Overlay(trial,state,failure=false) {
-  if(document.getElementById('bim-instruction-overlay')) return;
+  if(document.getElementById('bim-instruction-overlay'))return;
   ensureBimanualStyles();v20Style();
   const overlay=document.createElement('div');overlay.id='bim-instruction-overlay';overlay.dataset.scene=trial.scene||'practice';
+  if(!failure&&trial.demo)overlay.classList.add('v22-immersive');
+  if(!failure&&trial.demo==='dynamic')overlay.classList.add('v23-calibration');
   const panel=document.createElement('div');panel.className='bim-panel';overlay.appendChild(panel);
   const title=document.createElement('h2');title.textContent=failure?'Session ended':trial.title;panel.appendChild(title);
   const lines=failure?[
-    state.failureReason==='rule_check_failed'?'You did not pass the control check.': 'We could not complete the movement or tracking check.',
-    V20_CONFIG.partialPaymentText,V20_CONFIG.failureReturnText
+    state.failureReason==='rule_check_failed'?'You did not pass the control check.':'We could not complete the movement or tracking check.',
+    V20_CONFIG.partialPaymentText,
+    V20_CONFIG.failureReturnText
   ]:trial.lines;
   if(!failure&&trial.demo) {
-    const canvas=document.createElement('canvas');canvas.className='v20-demo';canvas.setAttribute('aria-label',`${trial.demo} movement demonstration`);panel.appendChild(canvas);
+    const canvas=document.createElement('canvas');canvas.className='v20-demo';
+    canvas.setAttribute('aria-label',`${trial.demo} movement demonstration`);panel.appendChild(canvas);
     const start=performance.now();
-    const schedule=()=>{const id=requestAnimationFrame(()=>{bimanualInstructionRafs.delete(id);loop();});bimanualInstructionRafs.add(id);};
-    const loop=()=>{if(!canvas.isConnected)return;v20Demo(canvas,trial.demo,performance.now()-start);schedule();};
-    // First frame after attaching the panel.
-    schedule();
+    const loop=()=>{
+      if(!canvas.isConnected||state.finished)return;
+      const elapsed=performance.now()-start;
+      v20Demo(canvas,trial.demo,trial.autoAdvance?Math.min(elapsed,V20_CONFIG.dynamicDemoMs-1):elapsed);
+      if(trial.autoAdvance&&elapsed>=V20_CONFIG.dynamicDemoMs) {
+        state.finished=true;removeBimanualOverlay();return;
+      }
+      const id=requestAnimationFrame(()=>{bimanualInstructionRafs.delete(id);loop();});
+      bimanualInstructionRafs.add(id);
+    };
+    // Start once the element has been attached to the DOM.
+    const first=requestAnimationFrame(()=>{bimanualInstructionRafs.delete(first);loop();});
+    bimanualInstructionRafs.add(first);
   }
   for(const line of lines||[]) {const p=document.createElement('div');p.className='v20-copy';p.textContent=line;panel.appendChild(p);}
-  const button=document.createElement('button');button.type='button';button.className='bim-main-button';
-  button.textContent=failure?'Return to Prolific':trial.demo?'Start':'Continue';panel.appendChild(button);
-  button.addEventListener('click',()=>{
-    if(failure) {
-      state.failureAcknowledged=true;state.finished=true;
-      if(V20_CONFIG.prolificReturnUrl) window.open(V20_CONFIG.prolificReturnUrl,'_blank','noopener,noreferrer');
-    } else state.finished=true;
-    removeBimanualOverlay();
-  });
+  if(!failure&&trial.autoAdvance) {
+    // Auto-advance immediately after the full-screen movement demonstration.
+  } else {
+    const button=document.createElement('button');button.type='button';button.className='bim-main-button';
+    button.textContent=failure?'Return to Prolific':'Continue';panel.appendChild(button);
+    button.addEventListener('click',()=>{
+      if(failure) {
+        state.failureAcknowledged=true;state.finished=true;
+        if(V20_CONFIG.prolificReturnUrl)window.open(V20_CONFIG.prolificReturnUrl,'_blank','noopener,noreferrer');
+      }else state.finished=true;
+      removeBimanualOverlay();
+    });
+  }
   document.body.appendChild(overlay);
 }
 function v20Custom(trial) {return ['v20_dynamic','v20_practice','v20_gate'].includes(trial.kind);}
@@ -7185,9 +7478,24 @@ function v20StartState(trial) {
     sequence:trial.sequence?[...trial.sequence]:[],attempts:[],errors:0,roundCorrect:0,perfectRounds:0,gatePassed:false,
     movingFrames:[],dynamicSteps:[],dynamicMoved:{Left:false,Right:false},lastT:null,clock:0,lastValid:false,
     lostAt:null,invalidTrackingAttempts:0,candidate:null,candidateFrames:0,initial:null,origin:null,
+    onsetFrames:0,onsetCandidateMs:null,outboundPeakTask:{x:0,y:0},outboundPeakR:0,
+    peakAtMs:null,previousTask:null,endpointTask:null,
     failureReason:null,currentTask:{x:0,y:0},maxR:0};
 }
 function v20HomePoint(hand) {const c=calibration[hand==='Left'?'left':'right'];return {x:c.homeX,y:c.homeY};}
+/* V23: visualization-only display for the both-hands check.
+   Camera-space calibration points are allowed to be vertically offset per hand.
+   Show both hands in a matched virtual workspace instead, while moving the
+   tracker dot by the SAME per-hand calibrated transform as its corresponding
+   target. Otherwise a forced-aligned ring would lie about hit proximity. */
+function v23DynamicDisplayPoint(hand,normalized) {
+  const anchors=CALIBRATION_TARGETS[hand];
+  const x=Number.isFinite(normalized?.x)?normalized.x:0;
+  const y=Number.isFinite(normalized?.y)?normalized.y:0;
+  const ax=x<0?(anchors.home.x-anchors.left.x):(anchors.right.x-anchors.home.x);
+  const ay=y<0?(anchors.home.y-anchors.up.y):(anchors.down.y-anchors.home.y);
+  return {x:anchors.home.x+x*ax,y:anchors.home.y+y*ay};
+}
 function v20Hold(state,hand,inside,now,duration) {
   if(!inside)state.hold[hand]=null;else if(state.hold[hand]==null)state.hold[hand]=now;
   state.holdPct[hand]=state.hold[hand]==null?0:clamp((now-state.hold[hand])/duration,0,1)*100;
@@ -7350,47 +7658,92 @@ function v20Frame(args) {
 }
 function v20DrawCustom(ctx,args) {
   const {trial,state,canvas,tMs,setReadout}=args;
-  const W=canvas.__logicalWidth??canvas.clientWidth??canvas.width,H=canvas.__logicalHeight??canvas.clientHeight??canvas.height;
+  const W=canvas.__logicalWidth??canvas.clientWidth??canvas.width;
+  const H=canvas.__logicalHeight??canvas.clientHeight??canvas.height;
   const palms={};for(const hand of ['Left','Right'])palms[hand]=getPalmCenter(getHand(args.allLandmarks||[],args.allHandedness||[],hand));
   beginParticipantFacingOverlay(ctx,W);v20Scene(ctx,W,H,trial.scene);
   if(state.failureReason){endParticipantFacingOverlay(ctx);v20Overlay(trial,state,true);return;}
   const required=trial.kind==='v20_practice'?[trial.hand]:['Left','Right'];
-  ctx.textAlign='center';ctx.font='600 20px system-ui';ctx.fillStyle='#e8f4f7';
+  const scale=Math.min(W,H);
+  ctx.textAlign='center';ctx.textBaseline='middle';ctx.font=`700 ${Math.round(scale*.037)}px system-ui`;ctx.fillStyle='#f3f5fc';
   if(trial.kind==='v20_dynamic'||state.phase==='home') {
-    const route=['home','up','home','down','home','left','home','right','home'];
+    const route=V25_TWO_HAND_CALIBRATION_ROUTE;
     const direction=trial.kind==='v20_dynamic'?(route[state.step]||'home'):'home';
     for(const hand of required) {
-      const c=calibration[hand==='Left'?'left':'right'];
-      const point={x:direction==='left'?c.leftX:direction==='right'?c.rightX:c.homeX,
-        y:direction==='up'?c.upY:direction==='down'?c.downY:c.homeY};
-      drawCalibrationBeacon(ctx,point.x*W,point.y*H,CALIBRATION_TARGET_RADIUS*Math.min(W,H),direction,state.hold[hand]!=null,state.holdPct[hand],tMs);
-      const p=palms[hand];if(p)drawCalibrationTracker(ctx,p.viewX*W,p.viewY*H,state.hold[hand]!=null,tMs);
-      ctx.fillText(`${hand.toUpperCase()} HAND`,c.homeX*W,H*.90);
+      if(trial.kind==='v20_dynamic') {
+        // The same normalized display-space transform is applied to both
+        // target and current hand so the rings align and tracking stays valid.
+        const point=CALIBRATION_TARGETS[hand][direction];
+        drawCalibrationBeacon(ctx,point.x*W,point.y*H,CALIBRATION_TARGET_RADIUS*scale,direction,
+          state.hold[hand]!=null,state.holdPct[hand],tMs);
+        const n=normalizedHandPosition(hand,palms[hand]);
+        if(Number.isFinite(n.x)&&Number.isFinite(n.y)) {
+          const p=v23DynamicDisplayPoint(hand,n);
+          drawCalibrationTracker(ctx,p.x*W,p.y*H,state.hold[hand]!=null,tMs);
+        }
+      } else {
+        // Practice and control check still use the actual camera-calibrated
+        // physical HOME points. Do not change either experiment's geometry.
+        const c=calibration[hand==='Left'?'left':'right'];
+        const point={x:direction==='left'?c.leftX:direction==='right'?c.rightX:c.homeX,
+          y:direction==='up'?c.upY:direction==='down'?c.downY:c.homeY};
+        drawCalibrationBeacon(ctx,point.x*W,point.y*H,CALIBRATION_TARGET_RADIUS*scale,direction,
+          state.hold[hand]!=null,state.holdPct[hand],tMs);
+        const p=palms[hand];if(p)drawCalibrationTracker(ctx,p.viewX*W,p.viewY*H,state.hold[hand]!=null,tMs);
+      }
     }
-    if(trial.kind==='v20_dynamic')ctx.fillText(Object.values(state.hold).every(x=>x!=null)?'Hold still':direction==='home'?'Return to the starting circles':`Move both hands ${direction.toUpperCase()}`,W/2,55);
+    if(trial.kind==='v20_dynamic') {
+      const holding=required.every(hand=>state.hold[hand]!=null);
+      const msg=holding?'Hold still':direction==='home'?'Return both hands to the starting circles':
+        `Move both hands ${direction.toUpperCase()}`;
+      ctx.fillText(msg,W/2,scale*.10);
+    }else if(state.phase==='home') {
+      ctx.fillText(trial.kind==='v20_practice'?`Place your ${trial.hand.toLowerCase()} hand in the starting circle`:
+        'Place both hands in the starting circles',W/2,scale*.10);
+    }
   } else {
     const direction=state.phase==='feedback'?state.lastResult?.targetDirection:state.sequence[state.index];
     const target=TARGETS[direction];
     if(target) {
       const p=taskToCanvas(target.x,target.y,W,H);
-      const gemCollected=state.phase==='feedback'&&state.lastResult?.endpointHit===true;
-      // On a confirmed hit the gem disappears and a collection sparkle appears.
-      // A timeout leaves the gem visible, distinguishing failure from success.
-      if(gemCollected) drawCollectSparkle(ctx,p.x,p.y,Math.max(0,state.clock-state.feedbackAt));
-      else drawGem(ctx,p.x,p.y,gemVisualRadiusPx(W,H),1,tMs);
-      const r=Math.hypot(state.currentTask.x,state.currentTask.y),cap=r>TARGET_ECCENTRICITY?TARGET_ECCENTRICITY/r:1;
-      const cursor=taskToCanvas(state.currentTask.x*cap,state.currentTask.y*cap,W,H);drawTreasureCompassCursor(ctx,cursor.x,cursor.y);
+      const hit=state.phase==='feedback'&&state.lastResult?.endpointHit===true;
+      if(!hit)drawGem(ctx,p.x,p.y,gemVisualRadiusPx(W,H),4,tMs);
+      else drawCollectSparkle(ctx,p.x,p.y,state.clock-state.feedbackAt);
+      const r=Math.hypot(state.currentTask.x,state.currentTask.y);
+      const cap=r>TARGET_ECCENTRICITY?TARGET_ECCENTRICITY/r:1;
+      const cursor=taskToCanvas(state.currentTask.x*cap,state.currentTask.y*cap,W,H);
       if(trial.guided&&state.phase==='reach') {
-        const rule=V20_RULES[direction];ctx.fillText(`${rule.hand.toUpperCase()} HAND ${rule.arrow}`,W/2,65);
-        const home=v20HomePoint(rule.hand),dx=rule.axis==='x'?rule.sign*55:0,dy=rule.axis==='y'?rule.sign*55:0;
-        v20Arrow(ctx,home.x*W,Math.min(home.y*H,H*.78),dx,dy);
+        const rule=V20_RULES[direction];
+        // One clear gesture per gem: the translucent palm originates at the
+        // cursor's HOME (screen centre), then moves in physical hand direction.
+        // The actual cursor remains independently controlled by tracked hands.
+        const elapsed=Math.max(0,state.clock-(state.targetAt??state.clock));
+        const amt=demoEase01(clamp((elapsed-350)/1200,0,1));
+        const cueX=W*.50,cueY=H*.50;
+        const motion=scale*.19;
+        const endX=cueX+(rule.axis==='x'?rule.sign*motion:0);
+        const endY=cueY+(rule.axis==='y'?rule.sign*motion:0);
+        ctx.save();ctx.strokeStyle='rgba(244,211,145,.44)';ctx.lineWidth=2.5;
+        ctx.setLineDash([5,8]);ctx.beginPath();ctx.moveTo(cueX,cueY);
+        ctx.lineTo(endX,endY);ctx.stroke();ctx.restore();
+        drawOpenSourcePalm(ctx,cueX+(endX-cueX)*amt,cueY+(endY-cueY)*amt,
+          scale*.081,rule.hand,.76);
+        ctx.fillText(`Move your ${rule.hand.toLowerCase()} hand ${rule.handWord}`,W/2,scale*.10);
       }
-      if(state.phase==='feedback')ctx.fillText(
-        state.lastResult.endpointHit?'Correct — Gem collected!':
-        state.lastResult.timedOut?'Time out — Gem not collected':'Incorrect — Gem not collected',W/2,65);
+      // Render the cursor last so even at the start of the hand demonstration
+      // the gold feedback token remains visible and cannot be mistaken for art.
+      drawTreasureCompassCursor(ctx,cursor.x,cursor.y);
+      if(state.phase==='feedback') {
+        ctx.fillStyle=hit?'#f4d894':'#ecedf2';
+        ctx.fillText(hit?'Gem collected!':'Not quite. Try the next gem.',W/2,scale*.10);
+      }
     }
   }
-  if(state.lostAt!=null){ctx.fillStyle='#ffdb91';ctx.fillText(required.length===2?'Show both palms to the camera.':`Show your ${trial.hand.toLowerCase()} palm to the camera.`,W/2,H*.82);}
+  if(state.lostAt!=null) {
+    ctx.fillStyle='#ffe4a4';
+    ctx.fillText(required.length===2?'Show both palms to the camera.':
+      `Show your ${trial.hand.toLowerCase()} palm to the camera.`,W/2,H*.86);
+  }
   endParticipantFacingOverlay(ctx);setReadoutIfChanged(state,setReadout,'');
 }
 
@@ -7419,7 +7772,12 @@ const experiment={
     }
   },
   onTrialStart(trial,context) {
-    if(typeof document!=='undefined') {removeBimanualOverlay();v20Style();document.body.dataset.v20Scene=trial.scene||'setup';}
+    if(typeof document!=='undefined') {
+      removeBimanualOverlay();v20Style();
+      document.body.dataset.v20Scene=trial.scene||'setup';
+      document.body.dataset.v20Task=trial.kind;
+      v22ShowPercent(trial,null);
+    }
     if(v20Custom(trial)) {
       setTreasureReachingUiMode(null);setBimanualTrackingOverlay(false);
       document.body.classList.add('bim-custom-flow-active');return v20StartState(trial);
@@ -7427,18 +7785,15 @@ const experiment={
     return legacyExperiment.onTrialStart(trial,context);
   },
   onFrame(args) {
-    if(v20Custom(args.trial))return v20Frame(args);
-    return legacyExperiment.onFrame(args);
+    const derived=v20Custom(args.trial)?v20Frame(args):legacyExperiment.onFrame(args);
+    v22ShowPercent(args.trial,args.state);
+    return derived;
   },
   draw(ctx,args) {
-    if(args.trial.v20) {v20Overlay(args.trial,args.state);setReadoutIfChanged(args.state,args.setReadout,'');return;}
+    if(args.trial.v20) {v22ShowPercent(args.trial,args.state);v20Overlay(args.trial,args.state);setReadoutIfChanged(args.state,args.setReadout,'');return;}
     if(v20Custom(args.trial)){ensureResponsiveStage();fitStageToViewport();v20DrawCustom(ctx,args);return;}
     legacyExperiment.draw(ctx,args);
-    if(args.trial.v20Formal) {
-      const W=args.canvas.__logicalWidth??args.canvas.clientWidth??args.canvas.width,H=args.canvas.__logicalHeight??args.canvas.clientHeight??args.canvas.height;
-      beginParticipantFacingOverlay(ctx,W);
-      v20Progress(ctx,W,H,((args.trial.visualReachOffset||0)+args.state.reaches.length)/240);endParticipantFacingOverlay(ctx);
-    }
+    // Numeric percent is rendered in a single fixed DOM badge for all stages.
   },
   onTrialEnd(args) {
     if(v20Custom(args.trial)) {
@@ -7448,6 +7803,8 @@ const experiment={
         blockFinishedNormally:s.finished===true&&!s.failureReason,failureReason:s.failureReason||(s.finished?null:'v20_stage_incomplete'),
         gatePassed:s.gatePassed,gateErrorCount:s.errors,perfectRounds:s.perfectRounds,
         gateThresholds:{maxErrors:V20_CONFIG.gateMaxErrors,maxAttempts:V20_CONFIG.gateMaxAttempts,perfectRounds:V20_CONFIG.gatePerfectRounds},
+        gateScoring:'visible_cursor_enters_gem_circle_within_time_limits',
+        gateToleranceTaskUnits:TARGET_HIT_RADIUS,planningTimeLimitMs:V20_CONFIG.planningWindowMs,
         targetSequence:s.sequence,reaches:s.attempts,invalidTrackingAttempts:s.invalidTrackingAttempts,
         dynamicSteps:s.dynamicSteps,dynamicPreflightQuality:s.dynamicQuality??null,
         dynamicMovingFrameCount:s.movingFrames.length,partialPaymentRequired:!!s.failureReason||!s.finished};
