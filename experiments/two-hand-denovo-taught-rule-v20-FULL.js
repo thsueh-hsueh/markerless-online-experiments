@@ -7211,9 +7211,7 @@ const v20Trials=[
   v20Page('v20_right_no_arrow','YOUR RIGHT HAND',['Now try without the hints.']),
   v20Practice('Right',false),
   v20Page('v20_gate_intro',"Let's see what you've learned!",[
-    'Use the rules you learned to move the cursor toward each gem.',
-    'Your FIRST hand movement determines whether the direction is correct.',
-    'A later correction or gem hit does not change the initial-direction score.'
+    'Use the rules you learned to move the cursor toward each gem.'
   ]),
   {id:'v20_control_gate',kind:'v20_gate',scene:'practice',sequence:v20BalancedSequence(V20_CARDINAL,6),showCamera:false,durationSec:1200,countdownSec:0,prompt:''},
   v20Page('v20_formal_intro','Ready to collect the gems?',[
@@ -7446,7 +7444,6 @@ function v20Overlay(trial,state,failure=false) {
   const title=document.createElement('h2');title.textContent=failure?'Session ended':trial.title;panel.appendChild(title);
   const lines=failure?[
     state.failureReason==='rule_check_failed'?'You did not pass the control check.':'We could not complete the movement or tracking check.',
-    V20_CONFIG.partialPaymentText,
     V20_CONFIG.failureReturnText
   ]:trial.lines;
   if(!failure&&trial.demo) {
