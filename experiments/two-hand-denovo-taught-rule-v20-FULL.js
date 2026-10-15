@@ -7130,7 +7130,18 @@ const V20_CONFIG = Object.freeze({
   gateMaxAttempts: 24,
   gatePerfectRounds: 2,
   practiceMovementWindowMs: 5000,
-  gateMovementWindowMs: 15000, // Control Check only; timer starts at first detected movement.
+  gateDeadZone: 0.12,
+  gateInitialSampleRadii: [0.15,0.20,0.25],
+  gateConfirmRadius: 0.35,
+  gateOutwardMinMs: 120,
+  gateMinMotionFrames: 3,
+  gateMaxStepSpeedUnitsPerMs: 0.009, // >9 calibrated units/second is an implausible tracking jump.
+  gateSyncWindowMs: 180,
+  gateSyncDecisionGraceMs: 95, // Extra frames to allow a second movement to confirm.
+  gateSyncPendingMaxMs: 700,
+  gateIdeToleranceDeg: 30,
+  gateMaxTechnicalRetriesPerTarget: 2,
+  gateMaxTechnicalInvalidTotal: 6,
   planningWindowMs: 15000,
   stageSafetyDurationSec: 300, // Keep the existing single-hand practice stage limit.
   dynamicDemoMs: V25_TWO_HAND_DEMO_MS, // Full-screen teaching demo only.
@@ -7327,6 +7338,8 @@ function v20Style() {
       text-shadow:0 2px 14px rgba(0,0,0,.75);font-variant-numeric:tabular-nums}
 
     #bim-instruction-overlay .bim-main-button {background:#304f76;border-color:#bfa76e;min-height:52px;margin-top:20px}
+    /* The runner's generic technical stop is not an additional V20 Return page. */
+    body.v20-exit-overlay-active #screen-technical-stop {display:none !important}
     body[data-v20-scene] #stage {background:#09172b}
     /* Hide the OS pointer only during actual motion checks and reaching, not on instruction buttons. */
     body[data-v20-task="v20_dynamic"] #stage, body[data-v20-task="v20_dynamic"] #stage *,
@@ -7426,6 +7439,7 @@ function v20Overlay(trial,state,failure=false) {
   if(document.getElementById('bim-instruction-overlay'))return;
   ensureBimanualStyles();v20Style();
   const overlay=document.createElement('div');overlay.id='bim-instruction-overlay';overlay.dataset.scene=trial.scene||'practice';
+  if(failure)document.body.classList.add('v20-exit-overlay-active');
   if(!failure&&trial.demo)overlay.classList.add('v22-immersive');
   if(!failure&&trial.demo==='dynamic')overlay.classList.add('v23-calibration');
   const panel=document.createElement('div');panel.className='bim-panel';overlay.appendChild(panel);
@@ -7463,7 +7477,11 @@ function v20Overlay(trial,state,failure=false) {
       if(failure) {
         state.failureAcknowledged=true;state.finished=true;
         if(V20_CONFIG.prolificReturnUrl)window.open(V20_CONFIG.prolificReturnUrl,'_blank','noopener,noreferrer');
-      }else state.finished=true;
+        // Keep the study-specific exit overlay visible on the original tab.
+        // Otherwise the runner's outdated tracking-error Return page reappears.
+        return;
+      }
+      state.finished=true;
       removeBimanualOverlay();
     });
   }
@@ -7481,6 +7499,8 @@ function v20StartState(trial) {
     lostAt:null,invalidTrackingAttempts:0,candidate:null,candidateFrames:0,initial:null,origin:null,
     onsetFrames:0,onsetCandidateMs:null,outboundPeakTask:{x:0,y:0},outboundPeakR:0,
     peakAtMs:null,previousTask:null,endpointTask:null,
+    gateTrackers:null,gateTechnicalInvalidTotal:0,gateTechnicalInvalidForTarget:0,
+    gateNoResponseCount:0,
     failureReason:null,currentTask:{x:0,y:0},maxR:0};
 }
 function v20HomePoint(hand) {const c=calibration[hand==='Left'?'left':'right'];return {x:c.homeX,y:c.homeY};}
@@ -7511,6 +7531,177 @@ function v20Hold(state,hand,inside,now,duration) {
   return state.holdPct[hand]>=100;
 }
 function v20ResetHold(state) {state.hold={Left:null,Right:null};state.holdPct={Left:0,Right:0};}
+/* Control Check V2: detect a committed outward movement, then sample its
+   EARLY direction retrospectively. No changes to single-hand practice/formal. */
+function v20GateNewTracker() {
+  return {last:null,candidate:null,confirmed:null,jumps:0,abortedCandidates:0};
+}
+function v20GateInitMotion(state) {
+  state.gateTrackers={Left:v20GateNewTracker(),Right:v20GateNewTracker()};
+  state.gateFirstConfirmationAt=null;
+  state.gateInitialTrajectory=[];
+}
+function v20GateThresholdPoint(previous,current,radius) {
+  const a=previous?.r??0,b=current.r;
+  if(b<radius||a>=radius)return null;
+  const f=clamp((radius-a)/Math.max(1e-9,b-a),0,1);
+  return {t:previous.t+(current.t-previous.t)*f,
+    x:previous.x+(current.x-previous.x)*f,
+    y:previous.y+(current.y-previous.y)*f,r:radius};
+}
+function v20GateTrackHand(tracker,delta,clock) {
+  if(tracker.confirmed)return;
+  const now={t:clock,x:delta.x,y:delta.y,r:Math.hypot(delta.x,delta.y)};
+  const prior=tracker.last;
+  tracker.last=now;
+  if(!prior||now.t<=prior.t)return;
+  const speed=Math.hypot(now.x-prior.x,now.y-prior.y)/(now.t-prior.t);
+  if(speed>V20_CONFIG.gateMaxStepSpeedUnitsPerMs) {
+    tracker.jumps++;
+    tracker.candidate=null;
+    return;
+  }
+  if(now.r<V20_CONFIG.gateDeadZone*.85) {
+    if(tracker.candidate)tracker.abortedCandidates++;
+    tracker.candidate=null;
+    return;
+  }
+  if(!tracker.candidate&&now.r>=V20_CONFIG.gateDeadZone) {
+    const begin=v20GateThresholdPoint(prior,now,V20_CONFIG.gateDeadZone);
+    tracker.candidate={onsetMs:begin?.t??clock,frames:0,riseFrames:0,
+      maxRadius:V20_CONFIG.gateDeadZone,points:{},samples:[]};
+  }
+  const c=tracker.candidate;
+  if(!c)return;
+  c.frames++;
+  if(now.r>c.maxRadius+0.009)c.riseFrames++;
+  c.maxRadius=Math.max(c.maxRadius,now.r);
+  if(c.samples.length<90)c.samples.push({t:now.t,x:now.x,y:now.y,r:now.r});
+  for(const rad of V20_CONFIG.gateInitialSampleRadii) {
+    const key=rad.toFixed(2);
+    if(c.points[key]==null){
+      const sample=v20GateThresholdPoint(prior,now,rad);
+      if(sample)c.points[key]=sample;
+    }
+  }
+  if(now.r>=V20_CONFIG.gateConfirmRadius &&
+     clock-c.onsetMs>=V20_CONFIG.gateOutwardMinMs &&
+     c.frames>=V20_CONFIG.gateMinMotionFrames && c.riseFrames>=2 &&
+     V20_CONFIG.gateInitialSampleRadii.every(rad=>c.points[rad.toFixed(2)])) {
+    tracker.confirmed={...c,confirmedAtMs:clock,confirmRadius:now.r};
+  }
+}
+function v20GateEarlyVector(confirmed) {
+  if(!confirmed)return null;
+  const points=V20_CONFIG.gateInitialSampleRadii.map(r=>confirmed.points[r.toFixed(2)]);
+  if(points.some(p=>!p))return null;
+  // The spatially aligned samples are deliberately taken before the 0.35
+  // confirmation radius, avoiding a later corrective movement.
+  return {x:points.reduce((a,p)=>a+p.x,0)/points.length,
+    y:points.reduce((a,p)=>a+p.y,0)/points.length};
+}
+function v20GateDirectionAssessment(direction,mode,left,right) {
+  const L=left?v20GateEarlyVector(left):null;
+  const R=right?v20GateEarlyVector(right):null;
+  const task={x:L?-L.y:0,y:R?R.x:0};
+  const mag=Math.hypot(task.x,task.y);
+  const hasDirection=mag>=V20_CONFIG.gateDeadZone;
+  const angle=hasDirection?angleDeg(task.x,task.y):null;
+  const signedError=angle==null?null:wrapAngleDeg(angle-targetAngleDeg(direction));
+  return {mode,taskVector:task,taskMagnitude:mag,angle,
+    signedError,absoluteError:signedError==null?null:Math.abs(signedError),
+    correct:signedError!=null&&Math.abs(signedError)<=V20_CONFIG.gateIdeToleranceDeg,
+    classification:hasDirection?'ide':'ineffective_control'};
+}
+function v20GateDecide(state,direction,force=false) {
+  const left=state.gateTrackers.Left.confirmed;
+  const right=state.gateTrackers.Right.confirmed;
+  const confirmed=[['Left',left],['Right',right]].filter(([,c])=>!!c)
+    .sort((a,b)=>a[1].onsetMs-b[1].onsetMs);
+  if(!confirmed.length)return null;
+  const [firstHand,first]=confirmed[0];
+  const otherHand=firstHand==='Left'?'Right':'Left';
+  const other=state.gateTrackers[otherHand];
+  const firstStart=first.onsetMs;
+  const earliestDue=firstStart+V20_CONFIG.gateSyncWindowMs+
+    V20_CONFIG.gateOutwardMinMs+V20_CONFIG.gateSyncDecisionGraceMs;
+  if(!force&&state.clock<earliestDue)return null;
+  // If the other hand began within the synchrony window, let it complete the
+  // movement confirmation (bounded, so it cannot delay indefinitely).
+  if(!other.confirmed && other.candidate &&
+     other.candidate.onsetMs-firstStart<=V20_CONFIG.gateSyncWindowMs &&
+     !force&&state.clock<firstStart+V20_CONFIG.gateSyncPendingMaxMs)return null;
+  let mode='first_confirmed_hand';
+  let activeLeft=firstHand==='Left'?first:null;
+  let activeRight=firstHand==='Right'?first:null;
+  const second=confirmed[1];
+  if(second&&second[1].onsetMs-firstStart<=V20_CONFIG.gateSyncWindowMs){
+    activeLeft=left;activeRight=right;mode='near_simultaneous_composite';
+    // A fully formed wrong movement before the second hand even starts cannot
+    // be reclassified as a simultaneous plan by a subsequent correction.
+    const solo=v20GateDirectionAssessment(direction,'early_effect_before_second',
+      firstHand==='Left'?first:null,firstHand==='Right'?first:null);
+    const earlyAt=first.points['0.20']?.t;
+    if(solo.classification==='ide'&&!solo.correct &&
+       Number.isFinite(earlyAt)&&earlyAt+30<second[1].onsetMs){
+      activeLeft=firstHand==='Left'?first:null;
+      activeRight=firstHand==='Right'?first:null;
+      mode='early_error_before_second';
+    }
+  }
+  const result=v20GateDirectionAssessment(direction,mode,activeLeft,activeRight);
+  return {...result,firstHand,firstOnsetMs:first.onsetMs,
+    firstConfirmedMs:first.confirmedAtMs,
+    leftOnsetMs:left?.onsetMs??null,rightOnsetMs:right?.onsetMs??null,
+    onsetDifferenceMs:left&&right?right.onsetMs-left.onsetMs:null,
+    leftEarlyVector:v20GateEarlyVector(left),rightEarlyVector:v20GateEarlyVector(right),
+    trajectory:{Left:left?.samples??state.gateTrackers.Left.candidate?.samples??[],
+      Right:right?.samples??state.gateTrackers.Right.candidate?.samples??[]}};
+}
+function v20GateTechnicalInvalid(state,addEvent,tMs,reason) {
+  state.invalidTrackingAttempts++;
+  state.gateTechnicalInvalidTotal++;
+  state.gateTechnicalInvalidForTarget++;
+  addEvent('v20_gate_technical_invalid',{index:state.index,reason,tMs,
+    retryForTarget:state.gateTechnicalInvalidForTarget,total:state.gateTechnicalInvalidTotal});
+  if(state.gateTechnicalInvalidForTarget>V20_CONFIG.gateMaxTechnicalRetriesPerTarget ||
+     state.gateTechnicalInvalidTotal>V20_CONFIG.gateMaxTechnicalInvalidTotal) {
+    v20Fail(state,'gate_tracking_unreliable',addEvent,tMs);
+  }else{
+    state.phase='home';state.origin=null;v20ResetHold(state);
+    v20GateInitMotion(state);
+  }
+}
+function v20GateRecord(state,direction,rule,delta,task,result,addEvent,tMs) {
+  const correct=result.outcome==='correct';
+  const record={index:state.index,targetDirection:direction,targetAngleDeg:targetAngleDeg(direction),
+    requiredHand:rule.hand,ruleCorrect:correct,outcome:result.outcome,
+    initialDirectionDeg:result.angle??null,
+    initialDirectionalErrorDeg:result.signedError??null,
+    initialAbsoluteErrorDeg:result.absoluteError??null,
+    initialTaskVector:result.taskVector??null,
+    initialTaskMagnitude:result.taskMagnitude??null,
+    movementConfirmationMs:result.firstConfirmedMs??null,
+    leftOnsetMs:result.leftOnsetMs??null,rightOnsetMs:result.rightOnsetMs??null,
+    onsetDifferenceMs:result.onsetDifferenceMs??null,
+    firstHand:result.firstHand??null,decisionMode:result.mode??'no_response',
+    gateClassification:result.classification??'no_response',
+    earlyTrajectory:result.trajectory??null,
+    deadZone:V20_CONFIG.gateDeadZone,confirmRadius:V20_CONFIG.gateConfirmRadius,
+    ideToleranceDeg:V20_CONFIG.gateIdeToleranceDeg,
+    endpointTaskX:task.x,endpointTaskY:task.y,left:{...delta.Left},right:{...delta.Right},
+    reactionTimeMs:result.firstOnsetMs==null?null:result.firstOnsetMs-state.targetAt,
+    movementTimeMs:result.firstOnsetMs==null||result.firstConfirmedMs==null?null:result.firstConfirmedMs-result.firstOnsetMs,
+    timedOut:result.outcome==='no_response',tMs};
+  state.attempts.push(record);
+  state.lastResult=record;state.index++;state.feedbackAt=state.clock;state.phase='feedback';
+  if(!correct)state.errors++;else state.roundCorrect++;
+  if(result.outcome==='no_response')state.gateNoResponseCount++;
+  if(state.index%4===0){state.perfectRounds=state.roundCorrect===4?state.perfectRounds+1:0;state.roundCorrect=0;}
+  state.gateTechnicalInvalidForTarget=0;
+  addEvent('v20_gate_result',record);
+  addEvent('v20_practice_result',record); // Preserve existing analytics event name.
+}
 function v20Frame(args) {
   const {trial,state,tMs,addEvent}=args;
   const palms={},pos={};for(const hand of ['Left','Right']) {
@@ -7537,7 +7728,9 @@ function v20Frame(args) {
   if(!valid) {
     if(state.lostAt==null)state.lostAt=tMs;
     v20ResetHold(state);
-    if(trial.kind!=='v20_dynamic'&&state.phase==='reach') {
+    if(trial.kind==='v20_gate'&&state.phase==='reach') {
+      v20GateTechnicalInvalid(state,addEvent,tMs,'tracking_lost_during_reach');
+    } else if(trial.kind==='v20_practice'&&state.phase==='reach') {
       state.invalidTrackingAttempts++;state.phase='home';state.initial=null;state.candidate=null;state.candidateFrames=0;
       addEvent('v20_attempt_invalid_tracking',{index:state.index,tMs});
     }
@@ -7583,6 +7776,7 @@ function v20Frame(args) {
     if(ready) {
       state.origin={Left:{...pos.Left},Right:{...pos.Right}};state.phase='reach';state.targetAt=state.clock;
       state.initial=null;state.candidate=null;state.candidateFrames=0;state.moveAt=null;state.currentTask={x:0,y:0};state.maxR=0;
+      if(trial.kind==='v20_gate')v20GateInitMotion(state);
       v20ResetHold(state);addEvent('v20_gem_onset',{index:state.index,direction,requiredHand:rule.hand,tMs});
     }
     return derived;
@@ -7602,7 +7796,8 @@ function v20Frame(args) {
   state.currentTask=task;const radius=Math.hypot(task.x,task.y);state.maxR=Math.max(state.maxR,radius);
   const active=delta[rule.hand],other=delta[rule.hand==='Left'?'Right':'Left'];
   const activeR=Math.hypot(active.x,active.y),otherR=Math.hypot(other.x,other.y);
-  if(state.moveAt==null&&Math.max(activeR,trial.kind==='v20_gate'?otherR:0)>=V20_CONFIG.initialDirectionThreshold)state.moveAt=state.clock;
+  if(trial.kind==='v20_practice') {
+  if(state.moveAt==null&&activeR>=V20_CONFIG.initialDirectionThreshold)state.moveAt=state.clock;
   if(!state.initial) {
     const wrongHand=trial.kind==='v20_gate'&&otherR>=V20_CONFIG.initialDirectionThreshold&&otherR>activeR*1.5;
     const axisValue=active[rule.axis],orthogonal=active[rule.axis==='x'?'y':'x'];
@@ -7621,34 +7816,25 @@ function v20Frame(args) {
         addEvent('v20_initial_choice',{index:state.index,direction,...state.initial});}
     } else {state.candidate=null;state.candidateFrames=0;}
   }
+  }
   if (trial.kind==='v20_gate') {
-    const expired=state.moveAt==null
-      ? state.clock-state.targetAt>=V20_CONFIG.planningWindowMs
-      : state.clock-state.moveAt>=V20_CONFIG.gateMovementWindowMs;
-    const target=TARGETS[direction];
-    // Compare the visible (radially capped) cursor with the gem's logical hit circle.
-    // Merely reaching the wrong outer direction must NOT finish the trial.
-    const cap=radius>TARGET_ECCENTRICITY?TARGET_ECCENTRICITY/radius:1;
-    const visibleX=task.x*cap,visibleY=task.y*cap;
-    const hit=distance2d(visibleX,visibleY,target.x,target.y)<=TARGET_HIT_RADIUS;
-    if(hit||expired) {
-      const angle=radius>0?angleDeg(task.x,task.y):null;
-      const error=angle==null?null:wrapAngleDeg(angle-targetAngleDeg(direction));
-      const initialCorrect=state.initial?.correct===true;
-      const record={index:state.index,targetDirection:direction,targetAngleDeg:targetAngleDeg(direction),requiredHand:rule.hand,
-        initialChoice:state.initial,initialRuleCorrect:state.initial?.correct??null,
-        initialDirectionDeg:state.initial?.initialDirectionDeg??null,
-        initialDirectionalErrorDeg:state.initial?.initialDirectionalErrorDeg??null,
-        ruleCorrect:initialCorrect,endpointHit:hit,correctedAfterInitialError:hit&&!initialCorrect,
-        timedOut:expired&&!hit,endpointAngularErrorDeg:error,
-        endpointTaskX:task.x,endpointTaskY:task.y,left:{...delta.Left},right:{...delta.Right},
-        reactionTimeMs:state.moveAt==null?null:state.moveAt-state.targetAt,movementTimeMs:state.moveAt==null?null:state.clock-state.moveAt,
-        guided:trial.guided===true,feedback:'continuous_cursor_then_endpoint',tMs};
-      state.attempts.push(record);state.index++;state.feedbackAt=state.clock;state.phase='feedback';state.lastResult=record;
-      // Eligibility depends ONLY on the original initial-choice classification.
-      if(!initialCorrect)state.errors++;else state.roundCorrect++;
-      if(state.index%4===0){state.perfectRounds=state.roundCorrect===4?state.perfectRounds+1:0;state.roundCorrect=0;}
-      addEvent('v20_practice_result',record);
+    for(const hand of ['Left','Right'])v20GateTrackHand(state.gateTrackers[hand],delta[hand],state.clock);
+    const jumpCount=state.gateTrackers.Left.jumps+state.gateTrackers.Right.jumps;
+    if(jumpCount>=3){
+      v20GateTechnicalInvalid(state,addEvent,tMs,'discontinuous_early_trajectory');
+      return derived;
+    }
+    const confirmed=v20GateDecide(state,direction);
+    if(confirmed){
+      v20GateRecord(state,direction,rule,delta,task,
+        {...confirmed,outcome:confirmed.correct?'correct':'incorrect'},addEvent,tMs);
+    } else if(state.clock-state.targetAt>=V20_CONFIG.planningWindowMs) {
+      // If a movement was confirmed just before the deadline, score that
+      // already-committed action instead of mislabeling it as No response.
+      const atDeadline=v20GateDecide(state,direction,true);
+      if(atDeadline)v20GateRecord(state,direction,rule,delta,task,
+        {...atDeadline,outcome:atDeadline.correct?'correct':'incorrect'},addEvent,tMs);
+      else v20GateRecord(state,direction,rule,delta,task,{outcome:'no_response'},addEvent,tMs);
     }
   } else {
     // SINGLE-HAND PRACTICE ONLY: use exactly the same visible gem-circle hit
@@ -7768,7 +7954,7 @@ function v20DrawCustom(ctx,args) {
         const firstCorrect=state.lastResult?.ruleCorrect===true;
         ctx.fillStyle=(trial.kind==='v20_gate'?firstCorrect:hit)?'#f4d894':'#ecedf2';
         ctx.fillText(trial.kind==='v20_gate'
-          ? (firstCorrect?'Initial direction correct':'Initial direction incorrect')
+          ? (state.lastResult?.outcome==='no_response'?'No valid movement detected':firstCorrect?'Initial direction correct':'Initial direction incorrect')
           : (hit?'Gem collected!':'Not quite. Try the next gem.'),W/2,scale*.10);
       }
     }
@@ -7794,7 +7980,9 @@ const experiment={
       let decision;
       if(v20Custom(trial)) {
         const passed=trial.kind==='v20_gate'?summary?.gatePassed===true:summary?.blockFinishedNormally===true;
-        decision=passed?{action:'continue'}:{action:'terminate',status:trial.kind==='v20_gate'?'instruction_check_incomplete':'technical_preflight_failure',
+        const trackingFailed=trial.kind==='v20_gate'&&['gate_tracking_unreliable','tracking_unavailable'].includes(summary?.failureReason);
+        decision=passed?{action:'continue'}:{action:'terminate',
+          status:trial.kind==='v20_gate'&&!trackingFailed?'instruction_check_incomplete':'technical_preflight_failure',
           failureReason:summary?.failureReason||'v20_stage_incomplete',reasons:[summary?.failureReason||'v20_stage_incomplete']};
       } else decision=legacyExperiment.qualityControl.evaluateTrial(context);
       if(decision.action==='terminate'&&typeof document!=='undefined') {
@@ -7807,7 +7995,7 @@ const experiment={
   },
   onTrialStart(trial,context) {
     if(typeof document!=='undefined') {
-      removeBimanualOverlay();v20Style();
+      removeBimanualOverlay();document.body.classList.remove('v20-exit-overlay-active');v20Style();
       document.body.dataset.v20Scene=trial.scene||'setup';
       document.body.dataset.v20Task=trial.kind;
       v22ShowPercent(trial,null);
@@ -7837,10 +8025,19 @@ const experiment={
         blockFinishedNormally:s.finished===true&&!s.failureReason,failureReason:s.failureReason||(s.finished?null:'v20_stage_incomplete'),
         gatePassed:s.gatePassed,gateErrorCount:s.errors,perfectRounds:s.perfectRounds,
         gateThresholds:{maxErrors:V20_CONFIG.gateMaxErrors,maxAttempts:V20_CONFIG.gateMaxAttempts,perfectRounds:V20_CONFIG.gatePerfectRounds},
-        gateScoring:'initial_hand_axis_signed_direction_two_frame_confirmation',
-        gateInitialMovementThreshold:V20_CONFIG.initialDirectionThreshold,
-        gateInitialConfirmFrames:V20_CONFIG.initialDirectionConfirmFrames,
-        gateToleranceTaskUnits:TARGET_HIT_RADIUS,planningTimeLimitMs:V20_CONFIG.planningWindowMs,
+        gateScoring:'confirmed_outward_retrospective_initial_direction_error_30deg',
+        gateScoringParameters:{deadZone:V20_CONFIG.gateDeadZone,sampleRadii:V20_CONFIG.gateInitialSampleRadii,
+          confirmRadius:V20_CONFIG.gateConfirmRadius,outwardMinMs:V20_CONFIG.gateOutwardMinMs,
+          minFrames:V20_CONFIG.gateMinMotionFrames,maxStepSpeedUnitsPerMs:V20_CONFIG.gateMaxStepSpeedUnitsPerMs,
+          syncWindowMs:V20_CONFIG.gateSyncWindowMs,ideToleranceDeg:V20_CONFIG.gateIdeToleranceDeg,
+          maxTechnicalRetriesPerTarget:V20_CONFIG.gateMaxTechnicalRetriesPerTarget,
+          maxTechnicalInvalidTotal:V20_CONFIG.gateMaxTechnicalInvalidTotal},
+        gateTechnicalInvalidTotal:s.gateTechnicalInvalidTotal,
+        gateNoResponseCount:s.gateNoResponseCount,
+        gateInitialMovementThreshold:V20_CONFIG.gateDeadZone,
+        gateInitialConfirmFrames:V20_CONFIG.gateMinMotionFrames,
+        gateIdeToleranceDeg:V20_CONFIG.gateIdeToleranceDeg,
+        planningTimeLimitMs:V20_CONFIG.planningWindowMs,
         targetSequence:s.sequence,reaches:s.attempts,invalidTrackingAttempts:s.invalidTrackingAttempts,
         dynamicSteps:s.dynamicSteps,dynamicPreflightQuality:s.dynamicQuality??null,
         dynamicMovingFrameCount:s.movingFrames.length,partialPaymentRequired:!!s.failureReason||!s.finished};
