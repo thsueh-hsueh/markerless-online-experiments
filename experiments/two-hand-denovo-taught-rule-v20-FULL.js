@@ -7142,6 +7142,9 @@ const V20_CONFIG = Object.freeze({
   gateIdeToleranceDeg: 30,
   gateMaxTechnicalRetriesPerTarget: 2,
   gateMaxTechnicalInvalidTotal: 6,
+  gateResumableTrackingGapMs: 220, // Brief missing frames: resume only if early motion is still measurable.
+  gateTechnicalTrackingGapMs: 1200, // Longer continuous loss consumes one technical retry.
+  gateMaxFreeRestartsPerTarget: 8, // Prevent endless non-scored repeats under intermittent tracking.
   planningWindowMs: 15000,
   stageSafetyDurationSec: 300, // Keep the existing single-hand practice stage limit.
   dynamicDemoMs: V25_TWO_HAND_DEMO_MS, // Full-screen teaching demo only.
@@ -7497,6 +7500,8 @@ function v20StartState(trial) {
     onsetFrames:0,onsetCandidateMs:null,outboundPeakTask:{x:0,y:0},outboundPeakR:0,
     peakAtMs:null,previousTask:null,endpointTask:null,
     gateTrackers:null,gateTechnicalInvalidTotal:0,gateTechnicalInvalidForTarget:0,
+    gateTrackingGapActive:false,gateTrackingGapCount:0,gateFreeRestartCount:0,
+    gateFreeRestartsForTarget:0,gateTrackingGapMs:0,
     gateNoResponseCount:0,
     failureReason:null,currentTask:{x:0,y:0},maxR:0};
 }
@@ -7655,7 +7660,44 @@ function v20GateDecide(state,direction,force=false) {
     trajectory:{Left:left?.samples??state.gateTrackers.Left.candidate?.samples??[],
       Right:right?.samples??state.gateTrackers.Right.candidate?.samples??[]}};
 }
+/* Missing one or a few tracking frames cannot by itself be evidence of
+   incorrect rule knowledge. During a dropout the existing active clock is
+   paused; resume an outward reach only if no early IDE threshold was crossed
+   unseen and both hands remain consistent with their last valid samples. */
+function v20GateCanResumeAfterGap(state,pos,gapMs) {
+  if(gapMs>V20_CONFIG.gateResumableTrackingGapMs||!state.origin||!state.gateTrackers)return false;
+  for(const hand of ['Left','Right']) {
+    const tracker=state.gateTrackers[hand];
+    const delta={x:pos[hand].x-state.origin[hand].x,y:pos[hand].y-state.origin[hand].y};
+    const radius=Math.hypot(delta.x,delta.y),last=tracker.last;
+    if(!last) {if(radius>V20_CONFIG.gateDeadZone*.85)return false;continue;}
+    // A plausible short displacement may be resumed, but do not interpolate a
+    // movement direction through a missing part of the early trajectory.
+    if(Math.hypot(delta.x-last.x,delta.y-last.y)>0.035+0.0025*gapMs)return false;
+    if(!tracker.confirmed) {
+      const sampleRadii=[V20_CONFIG.gateDeadZone,...V20_CONFIG.gateInitialSampleRadii,
+        V20_CONFIG.gateConfirmRadius];
+      if(sampleRadii.some(rad=>last.r<rad&&radius>=rad))return false;
+    }
+  }
+  return true;
+}
+function v20GateRestartUnscored(state,addEvent,tMs,reason,gapMs) {
+  state.gateFreeRestartCount++;
+  state.gateFreeRestartsForTarget++;
+  addEvent('v20_gate_unscored_restart',{index:state.index,reason,gapMs,tMs,
+    restartsForTarget:state.gateFreeRestartsForTarget});
+  state.gateTrackingGapActive=false;
+  state.phase='home';state.origin=null;v20ResetHold(state);v20GateInitMotion(state);
+  // Prolonged *intermittent* tracking errors also need a bounded retry path.
+  // These short-dropout restarts are not IDE errors and do not advance targets.
+  if(state.gateFreeRestartsForTarget>V20_CONFIG.gateMaxFreeRestartsPerTarget) {
+    state.gateFreeRestartsForTarget=0;
+    v20GateTechnicalInvalid(state,addEvent,tMs,'excessive_interrupted_early_trajectories');
+  }
+}
 function v20GateTechnicalInvalid(state,addEvent,tMs,reason) {
+  state.gateTrackingGapActive=false;
   state.invalidTrackingAttempts++;
   state.gateTechnicalInvalidTotal++;
   state.gateTechnicalInvalidForTarget++;
@@ -7696,6 +7738,7 @@ function v20GateRecord(state,direction,rule,delta,task,result,addEvent,tMs) {
   if(result.outcome==='no_response')state.gateNoResponseCount++;
   if(state.index%4===0){state.perfectRounds=state.roundCorrect===4?state.perfectRounds+1:0;state.roundCorrect=0;}
   state.gateTechnicalInvalidForTarget=0;
+  state.gateFreeRestartsForTarget=0;
   addEvent('v20_gate_result',record);
   addEvent('v20_practice_result',record); // Preserve existing analytics event name.
 }
@@ -7726,13 +7769,39 @@ function v20Frame(args) {
     if(state.lostAt==null)state.lostAt=tMs;
     v20ResetHold(state);
     if(trial.kind==='v20_gate'&&state.phase==='reach') {
-      v20GateTechnicalInvalid(state,addEvent,tMs,'tracking_lost_during_reach');
+      state.gateTrackingGapActive=true;
+      // Do not invalidate a reach on the first missing frame. Only a sustained
+      // absence counts as a technical retry; brief gaps pause the active clock.
+      if(tMs-state.lostAt>=V20_CONFIG.gateTechnicalTrackingGapMs) {
+        state.gateTrackingGapMs+=tMs-state.lostAt;
+        v20GateTechnicalInvalid(state,addEvent,tMs,'sustained_tracking_loss_during_reach');
+      }
     } else if(trial.kind==='v20_practice'&&state.phase==='reach') {
       state.invalidTrackingAttempts++;state.phase='home';state.initial=null;state.candidate=null;state.candidateFrames=0;
       addEvent('v20_attempt_invalid_tracking',{index:state.index,tMs});
     }
     if(tMs-state.lostAt>=V20_CONFIG.trackingFailureMs)v20Fail(state,'tracking_unavailable',addEvent,tMs);
     return derived;
+  }
+  if(trial.kind==='v20_gate'&&state.phase==='reach'&&state.gateTrackingGapActive) {
+    const gapMs=state.lostAt==null?0:Math.max(0,tMs-state.lostAt);
+    state.gateTrackingGapCount++;
+    state.gateTrackingGapMs+=gapMs;
+    state.gateTrackingGapActive=false;
+    if(!v20GateCanResumeAfterGap(state,pos,gapMs)) {
+      // If any early IDE threshold may have been crossed while unobserved,
+      // repeat the SAME target from HOME without assigning a wrong direction.
+      v20GateRestartUnscored(state,addEvent,tMs,'early_trajectory_not_observable',gapMs);
+      state.lostAt=null;
+      return derived;
+    }
+    // Do not interpolate across missing observations or infer onset inside a gap.
+    for(const hand of ['Left','Right']) {
+      const delta={x:pos[hand].x-state.origin[hand].x,y:pos[hand].y-state.origin[hand].y};
+      state.gateTrackers[hand].last={t:state.clock,x:delta.x,y:delta.y,
+        r:Math.hypot(delta.x,delta.y)};
+    }
+    addEvent('v20_gate_tracking_resumed',{index:state.index,gapMs,tMs});
   }
   state.lostAt=null;
   if(trial.kind==='v20_dynamic') {
@@ -8037,7 +8106,10 @@ const experiment={
         planningTimeLimitMs:V20_CONFIG.planningWindowMs,
         targetSequence:s.sequence,reaches:s.attempts,invalidTrackingAttempts:s.invalidTrackingAttempts,
         dynamicSteps:s.dynamicSteps,dynamicPreflightQuality:s.dynamicQuality??null,
-        dynamicMovingFrameCount:s.movingFrames.length,partialPaymentRequired:!!s.failureReason||!s.finished};
+        dynamicMovingFrameCount:s.movingFrames.length,
+        gateTrackingGapCount:s.gateTrackingGapCount,gateTrackingGapMs:s.gateTrackingGapMs,
+        gateFreeRestartCount:s.gateFreeRestartCount,
+        partialPaymentRequired:!!s.failureReason||!s.finished};
     }
     return {...legacyExperiment.onTrialEnd(args),protocolVersion:'v20',scene:args.trial.scene??'setup'};
   }
