@@ -7200,8 +7200,9 @@ const v20Trials=[
   v20Page('v20_right_no_arrow','YOUR RIGHT HAND',['Now try without the hints.']),
   v20Practice('Right',false),
   v20Page('v20_gate_intro',"Let's see what you've learned!",[
-    'Use the rules you learned to reach each gem.',
-    'You may change direction or try another movement until the cursor touches the gem.'
+    'Use the rules you learned to move the cursor toward each gem.',
+    'Your FIRST hand movement determines whether the direction is correct.',
+    'A later correction or gem hit does not change the initial-direction score.'
   ]),
   {id:'v20_control_gate',kind:'v20_gate',scene:'practice',sequence:v20BalancedSequence(V20_CARDINAL,6),showCamera:false,durationSec:1200,countdownSec:0,prompt:''},
   v20Page('v20_formal_intro','Ready to collect the gems?',[
@@ -7483,6 +7484,14 @@ function v20StartState(trial) {
     failureReason:null,currentTask:{x:0,y:0},maxR:0};
 }
 function v20HomePoint(hand) {const c=calibration[hand==='Left'?'left':'right'];return {x:c.homeX,y:c.homeY};}
+/* Control Check display-only alignment. Both HOME circles share y=0.55.
+   Translate each tracked hand by exactly the same offset as its HOME circle.
+   This preserves the visually indicated hit radius and all actual calibration/QC. */
+function v20GateDisplayPoint(hand,palm) {
+  const home=v20HomePoint(hand);
+  const displayHome=CALIBRATION_TARGETS[hand].home;
+  return {x:displayHome.x+(palm.viewX-home.x),y:displayHome.y+(palm.viewY-home.y)};
+}
 /* V23: visualization-only display for the both-hands check.
    Camera-space calibration points are allowed to be vertically offset per hand.
    Show both hands in a matched virtual workspace instead, while moving the
@@ -7601,7 +7610,14 @@ function v20Frame(args) {
     if(moved) {
       const answer=wrongHand?'wrong_hand':Math.abs(axisValue)<Math.abs(orthogonal)?'wrong_axis':axisValue*rule.sign>0?'correct':'wrong_direction';
       if(answer===state.candidate)state.candidateFrames++;else{state.candidate=answer;state.candidateFrames=1;}
-      if(state.candidateFrames>=V20_CONFIG.initialDirectionConfirmFrames){state.initial={classification:answer,correct:answer==='correct',tMs,left:{...delta.Left},right:{...delta.Right}};
+      if(state.candidateFrames>=V20_CONFIG.initialDirectionConfirmFrames){
+        // Record initial cursor angle as a descriptive measure, but retain the
+        // ORIGINAL rule criterion: first hand, axis, and signed direction.
+        const cursorR=Math.hypot(task.x,task.y);
+        const firstAngle=trial.kind==='v20_gate'&&cursorR>1e-9?angleDeg(task.x,task.y):null;
+        const firstError=firstAngle==null?null:wrapAngleDeg(firstAngle-targetAngleDeg(direction));
+        state.initial={classification:answer,correct:answer==='correct',tMs,left:{...delta.Left},right:{...delta.Right},
+          ...(trial.kind==='v20_gate'?{initialDirectionDeg:firstAngle,initialDirectionalErrorDeg:firstError}:{} )};
         addEvent('v20_initial_choice',{index:state.index,direction,...state.initial});}
     } else {state.candidate=null;state.candidateFrames=0;}
   }
@@ -7618,15 +7634,19 @@ function v20Frame(args) {
     if(hit||expired) {
       const angle=radius>0?angleDeg(task.x,task.y):null;
       const error=angle==null?null:wrapAngleDeg(angle-targetAngleDeg(direction));
+      const initialCorrect=state.initial?.correct===true;
       const record={index:state.index,targetDirection:direction,targetAngleDeg:targetAngleDeg(direction),requiredHand:rule.hand,
         initialChoice:state.initial,initialRuleCorrect:state.initial?.correct??null,
-        ruleCorrect:hit,endpointHit:hit,correctedAfterInitialError:hit&&state.initial?.correct===false,
+        initialDirectionDeg:state.initial?.initialDirectionDeg??null,
+        initialDirectionalErrorDeg:state.initial?.initialDirectionalErrorDeg??null,
+        ruleCorrect:initialCorrect,endpointHit:hit,correctedAfterInitialError:hit&&!initialCorrect,
         timedOut:expired&&!hit,endpointAngularErrorDeg:error,
         endpointTaskX:task.x,endpointTaskY:task.y,left:{...delta.Left},right:{...delta.Right},
         reactionTimeMs:state.moveAt==null?null:state.moveAt-state.targetAt,movementTimeMs:state.moveAt==null?null:state.clock-state.moveAt,
         guided:trial.guided===true,feedback:'continuous_cursor_then_endpoint',tMs};
       state.attempts.push(record);state.index++;state.feedbackAt=state.clock;state.phase='feedback';state.lastResult=record;
-      if(!hit)state.errors++;else state.roundCorrect++;
+      // Eligibility depends ONLY on the original initial-choice classification.
+      if(!initialCorrect)state.errors++;else state.roundCorrect++;
       if(state.index%4===0){state.perfectRounds=state.roundCorrect===4?state.perfectRounds+1:0;state.roundCorrect=0;}
       addEvent('v20_practice_result',record);
     }
@@ -7682,14 +7702,25 @@ function v20DrawCustom(ctx,args) {
           drawCalibrationTracker(ctx,p.x*W,p.y*H,state.hold[hand]!=null,tMs);
         }
       } else {
-        // Practice and control check still use the actual camera-calibrated
-        // physical HOME points. Do not change either experiment's geometry.
-        const c=calibration[hand==='Left'?'left':'right'];
-        const point={x:direction==='left'?c.leftX:direction==='right'?c.rightX:c.homeX,
-          y:direction==='up'?c.upY:direction==='down'?c.downY:c.homeY};
-        drawCalibrationBeacon(ctx,point.x*W,point.y*H,CALIBRATION_TARGET_RADIUS*scale,direction,
-          state.hold[hand]!=null,state.holdPct[hand],tMs);
-        const p=palms[hand];if(p)drawCalibrationTracker(ctx,p.viewX*W,p.viewY*H,state.hold[hand]!=null,tMs);
+        // Align only Control Check's two HOME rings. Both tracker dots get
+        // the identical per-hand translation; hit checks still use raw HOME.
+        if(trial.kind==='v20_gate') {
+          const point=CALIBRATION_TARGETS[hand].home;
+          drawCalibrationBeacon(ctx,point.x*W,point.y*H,CALIBRATION_TARGET_RADIUS*scale,'home',
+            state.hold[hand]!=null,state.holdPct[hand],tMs);
+          const p=palms[hand];if(p) {
+            const shown=v20GateDisplayPoint(hand,p);
+            drawCalibrationTracker(ctx,shown.x*W,shown.y*H,state.hold[hand]!=null,tMs);
+          }
+        } else {
+          // Preserve single-hand practice's original camera-calibrated HOME.
+          const c=calibration[hand==='Left'?'left':'right'];
+          const point={x:direction==='left'?c.leftX:direction==='right'?c.rightX:c.homeX,
+            y:direction==='up'?c.upY:direction==='down'?c.downY:c.homeY};
+          drawCalibrationBeacon(ctx,point.x*W,point.y*H,CALIBRATION_TARGET_RADIUS*scale,direction,
+            state.hold[hand]!=null,state.holdPct[hand],tMs);
+          const p=palms[hand];if(p)drawCalibrationTracker(ctx,p.viewX*W,p.viewY*H,state.hold[hand]!=null,tMs);
+        }
       }
     }
     if(trial.kind==='v20_dynamic') {
@@ -7734,8 +7765,11 @@ function v20DrawCustom(ctx,args) {
       // the gold feedback token remains visible and cannot be mistaken for art.
       drawTreasureCompassCursor(ctx,cursor.x,cursor.y);
       if(state.phase==='feedback') {
-        ctx.fillStyle=hit?'#f4d894':'#ecedf2';
-        ctx.fillText(hit?'Gem collected!':'Not quite. Try the next gem.',W/2,scale*.10);
+        const firstCorrect=state.lastResult?.ruleCorrect===true;
+        ctx.fillStyle=(trial.kind==='v20_gate'?firstCorrect:hit)?'#f4d894':'#ecedf2';
+        ctx.fillText(trial.kind==='v20_gate'
+          ? (firstCorrect?'Initial direction correct':'Initial direction incorrect')
+          : (hit?'Gem collected!':'Not quite. Try the next gem.'),W/2,scale*.10);
       }
     }
   }
@@ -7803,7 +7837,9 @@ const experiment={
         blockFinishedNormally:s.finished===true&&!s.failureReason,failureReason:s.failureReason||(s.finished?null:'v20_stage_incomplete'),
         gatePassed:s.gatePassed,gateErrorCount:s.errors,perfectRounds:s.perfectRounds,
         gateThresholds:{maxErrors:V20_CONFIG.gateMaxErrors,maxAttempts:V20_CONFIG.gateMaxAttempts,perfectRounds:V20_CONFIG.gatePerfectRounds},
-        gateScoring:'visible_cursor_enters_gem_circle_within_time_limits',
+        gateScoring:'initial_hand_axis_signed_direction_two_frame_confirmation',
+        gateInitialMovementThreshold:V20_CONFIG.initialDirectionThreshold,
+        gateInitialConfirmFrames:V20_CONFIG.initialDirectionConfirmFrames,
         gateToleranceTaskUnits:TARGET_HIT_RADIUS,planningTimeLimitMs:V20_CONFIG.planningWindowMs,
         targetSequence:s.sequence,reaches:s.attempts,invalidTrackingAttempts:s.invalidTrackingAttempts,
         dynamicSteps:s.dynamicSteps,dynamicPreflightQuality:s.dynamicQuality??null,
