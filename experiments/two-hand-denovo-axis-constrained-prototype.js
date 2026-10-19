@@ -7438,7 +7438,7 @@ function v22OverallFraction(trial,state) {
   if(breakMatch)return .15+.85*(Number(breakMatch[1])*60/240);
   if(index>=0&&index<firstFormal) {
     let progress=0;
-    if(trial?.kind==='v20_dynamic')progress=(state?.step||0)/V25_TWO_HAND_CALIBRATION_ROUTE.length;
+    if(trial?.kind==='v20_dynamic')progress=(state?.step||0)/AXIS_DYNAMIC_ROUTE.length;
     else if(trial?.kind==='v20_practice')progress=(state?.index||0)/(trial.sequence?.length||1);
     else if(trial?.kind==='v20_gate')progress=(state?.index||0)/V20_CONFIG.gateMaxAttempts;
     else if(trial?.kind==='continuous_calibration')progress=(state?.calibrationComplete?1:0);
@@ -8291,8 +8291,26 @@ const experiment={
     return legacyExperiment.onTrialStart(trial,context);
   },
   onFrame(args) {
+    const before=Array.isArray(args.state?.reaches)?args.state.reaches.length:
+      Array.isArray(args.state?.attempts)?args.state.attempts.length:0;
     const derived=v20Custom(args.trial)?v20Frame(args):legacyExperiment.onFrame(args);
+    const records=Array.isArray(args.state?.reaches)?args.state.reaches:
+      Array.isArray(args.state?.attempts)?args.state.attempts:null;
+    if(args.trial.axisConstrained&&records&&records.length>before){
+      const m=args.state.axisMonitor;
+      const last=records[records.length-1];
+      last.axisConstrained=true;
+      last.maxLeftOffAxis=m?.Left?.maxOffAxis??null;
+      last.maxRightOffAxis=m?.Right?.maxOffAxis??null;
+      if(last.offAxisViolation!==true)last.offAxisViolation=false;
+      axisAddEvent(args.addEvent,'axis_attempt_metrics',{
+        kind:args.trial.kind,targetDirection:last.targetDirection,
+        index:last.index??last.targetIndex??args.state.targetIndex,
+        offAxisViolation:last.offAxisViolation,
+        maxLeftOffAxis:last.maxLeftOffAxis,maxRightOffAxis:last.maxRightOffAxis});
+    }
     v22ShowPercent(args.trial,args.state);
+    axisDebugHud(args.trial,args.state);
     return derived;
   },
   draw(ctx,args) {
@@ -8308,7 +8326,7 @@ const experiment={
     if(v20Custom(args.trial)) {
       removeBimanualOverlay();setBimanualTrackingOverlay(false);
       const s=args.state,t=args.trial;
-      return {protocolVersion:'v20',stage:t.kind,hand:t.hand??null,guided:t.guided===true,
+      return {protocolVersion:'axis_constrained_v1',stage:t.kind,hand:t.hand??null,guided:t.guided===true,
         blockFinishedNormally:s.finished===true&&!s.failureReason,failureReason:s.failureReason||(s.finished?null:'v20_stage_incomplete'),
         gatePassed:s.gatePassed,gateErrorCount:s.errors,perfectRounds:s.perfectRounds,
         gateThresholds:{maxErrors:V20_CONFIG.gateMaxErrors,maxAttempts:V20_CONFIG.gateMaxAttempts,perfectRounds:V20_CONFIG.gatePerfectRounds},
