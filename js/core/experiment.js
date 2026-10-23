@@ -70,7 +70,8 @@ export async function main() {
 
   let exp;
   try {
-    exp = (await import(`../../experiments/${name}.js?v=5187`)).default;
+    const scriptVersion = name === "two-hand-denovo-axis-constrained-v12" ? "5188" : "5187";
+    exp = (await import(`../../experiments/${name}.js?v=${scriptVersion}`)).default;
   } catch (err) {
     return ui.fatal(
       `Could not load the experiment "${name}".`,
@@ -136,9 +137,11 @@ async function run(exp) {
     };
   }
 
-  /* ---- 2. Six essential pre-task questions only. */
+  /* ---- 2. Six essential questions: V12 defers them until after dynamic QC.
+   * All other experiments keep the original consent -> questions order. */
+  const preTaskQuestionsAfterTrialId = exp.participantFlow?.preTaskQuestionsAfterTrialId ?? null;
   let demographics = {};
-  if (!devMode && DEMOGRAPHIC_QUESTIONS.length) {
+  if (!devMode && !preTaskQuestionsAfterTrialId && DEMOGRAPHIC_QUESTIONS.length) {
     configureQuestionScreen({
       title: "A few quick questions",
       subtitle: "",
@@ -341,6 +344,25 @@ async function run(exp) {
     }
 
     i += 1;
+
+    /* For opted-in protocols only, collect the six pre-task questions AFTER
+     * the named technical gate has passed. Failed calibration/dynamic QC does
+     * not request these answers. Consent still precedes camera access.
+     * Persist immediately so the later final session save remains consistent. */
+    if (!devMode && preTaskQuestionsAfterTrialId === trial.id && DEMOGRAPHIC_QUESTIONS.length) {
+      configureQuestionScreen({
+        title: "A few quick questions",
+        subtitle: "",
+        buttonText: "Next",
+      });
+      demographics = await collectQuestionSet(DEMOGRAPHIC_QUESTIONS);
+      if (saving) {
+        await fb.saveSessionCheckpoint(sessionId, {
+          demographics,
+          demographicsCollectedAt: new Date().toISOString(),
+        });
+      }
+    }
 
     if (i < trials.length && currentTrialSummary.skipRestAfter !== true) {
       ui.showScreen("screen-rest");
