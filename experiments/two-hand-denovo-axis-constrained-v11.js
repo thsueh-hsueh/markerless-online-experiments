@@ -2703,7 +2703,7 @@ const BIM_DENOVO_BLOCKS = 4;
 const BIM_DENOVO_REACHES_PER_BLOCK = 60;
 const BIM_DENOVO_TOTAL_REACHES = BIM_DENOVO_BLOCKS * BIM_DENOVO_REACHES_PER_BLOCK;
 const BIM_DENOVO_TARGET_BLOCK_SIZE = 10;
-const BIM_DENOVO_BREAK_MIN_SEC = 0;
+const BIM_DENOVO_BREAK_MIN_SEC = 15;
 const BIM_TWO_DIRECTION_POOL = ["upLeft", "downRight"];
 const BIM_TARGET_DEADLINE_MS = 3000; // Baseline only.
 const BIM_DISCOVERY_MOVEMENT_WINDOW_MS = 600;
@@ -3640,13 +3640,11 @@ function ensureBimanualInstructionOverlay(trial, state) {
 
   if (trial.kind === 'bimanual_instruction' && trial.page === 'denovo_break') {
     panel.classList.add('bim-rule-panel');
-    const completedMatch = String(trial.id || '').match(/denovo_break_(\\d+)/);
-    const completed = completedMatch ? Number(completedMatch[1]) : null;
     panel.innerHTML = `
       <h2>Take a short break</h2>
       <div class="bim-sub">
-        ${Number.isFinite(completed) ? `${completed} of ${BIM_DENOVO_TOTAL_REACHES} Mystery Zone trials complete.<br>` : ''}
-        Rest for a moment. Continue when you are ready.
+        Relax your arms and shake out your hands.<br>
+        Please rest for at least 15 seconds.
       </div>
       <div class="bim-break-countdown" style="text-align:center;margin:10px 0 18px;color:#b9cce6;font-weight:800;"></div>
       <button type="button" class="bim-main-button" disabled>Continue</button>`;
@@ -3663,7 +3661,7 @@ function ensureBimanualInstructionOverlay(trial, state) {
         requestAnimationFrame(updateBreak);
         return;
       }
-      if (countdown) countdown.textContent = 'Continue when ready';
+      if (countdown) countdown.textContent = 'Continue when you are ready.';
       if (btn) btn.disabled = false;
     };
     updateBreak();
@@ -7607,7 +7605,7 @@ for(let block=0;block<4;block++) {
     targetSequence:V20_FORMAL_SEQUENCE.slice(block*60,(block+1)*60),visualReachOffset:block*60,
     skipRestAfter:true,training:true,noSpeedLimit:true,singleAttempt:true,movementWindowMs:600
   }),scene:'formal',v20Formal:true,axisConstrained:true});
-  if(block<3) v20Trials.push(v20Page(`v20_break_${block+1}`,`${(block+1)*25}% complete`,[],null,'formal'));
+  if(block<3) v20Trials.push(v20Page(`v20_break_${block+1}`,'Take a short break',[],null,'formal'));
 }
 
 function v20Scene(ctx,W,H,scene) {
@@ -7648,6 +7646,8 @@ function v22ShowPercent(trial,state) {
   let badge=document.getElementById('v22-study-percent');
   if(!badge){badge=document.createElement('div');badge.id='v22-study-percent';
     badge.setAttribute('aria-label','Study progress');document.body.appendChild(badge);}
+  // Formal inter-block breaks must not reveal 25/50/75% (or the global percent badge).
+  badge.style.display = /^v20_break_[1-3]$/.test(trial?.id || '') ? 'none' : '';
   const label=`${Math.floor(v22OverallFraction(trial,state)*100+1e-7)}%`;
   if(badge.textContent!==label)badge.textContent=label;
 }
@@ -7664,6 +7664,8 @@ function v20Style() {
       max-height:min(58vh,520px);object-fit:contain;margin:8px auto 18px;border-radius:16px;
       border:1px solid rgba(226,195,125,.20)}
     #bim-instruction-overlay .bim-panel {max-height:95dvh;overflow:auto}
+    #bim-instruction-overlay .bim-main-button:disabled {opacity:.56;cursor:not-allowed;filter:saturate(.55)}
+    #bim-instruction-overlay .v20-break-countdown {color:#b9cce6;font-weight:750}
     /* V22: demonstration itself occupies the whole viewport like calibration.
        No inner animation card, frame, or squashed half-height canvas. */
     #bim-instruction-overlay.v22-immersive {padding:0;overflow:hidden;align-items:stretch;justify-content:stretch}
@@ -7848,13 +7850,38 @@ function v20Overlay(trial,state,failure=false) {
     const first=requestAnimationFrame(()=>{bimanualInstructionRafs.delete(first);loop();});
     bimanualInstructionRafs.add(first);
   }
+  const isFormalBreak = !failure && /^v20_break_[1-3]$/.test(trial.id || '');
+  if (isFormalBreak) {
+    const directions=document.createElement('div');
+    directions.className='v20-copy v20-break-copy';
+    directions.textContent='Relax your arms and shake out your hands.';
+    panel.appendChild(directions);
+    const note=document.createElement('div');
+    note.className='v20-copy v20-break-note';
+    note.textContent='Please rest for at least 15 seconds.';
+    panel.appendChild(note);
+  }
   for(const line of lines||[]) {const p=document.createElement('div');p.className='v20-copy';p.textContent=line;panel.appendChild(p);}
   if(!failure&&trial.autoAdvance) {
     // Auto-advance immediately after the full-screen movement demonstration.
   } else {
     const button=document.createElement('button');button.type='button';button.className='bim-main-button';
-    button.textContent=failure?'Return to Prolific':'Continue';panel.appendChild(button);
+    button.textContent=failure?'Return to Prolific':'Continue';
+    if (isFormalBreak) {
+      // A disabled button + click guard both enforce a genuine minimum break.
+      button.disabled=true;
+      button.textContent=`Continue (${BIM_DENOVO_BREAK_MIN_SEC})`;
+      const countdown=document.createElement('div');
+      countdown.className='v20-copy v20-break-countdown';
+      countdown.setAttribute('aria-live','off');
+      countdown.textContent='Continue available in 15 s';
+      panel.appendChild(countdown);
+    }
+    panel.appendChild(button);
     button.addEventListener('click',()=>{
+      if (isFormalBreak &&
+          (!Number.isFinite(state.restStartedAtMs) ||
+           performance.now()-state.restStartedAtMs < BIM_DENOVO_BREAK_MIN_SEC*1000)) return;
       if(failure) {
         state.failureAcknowledged=true;state.finished=true;
         if(V20_CONFIG.prolificReturnUrl)window.open(V20_CONFIG.prolificReturnUrl,'_blank','noopener,noreferrer');
@@ -7862,11 +7889,32 @@ function v20Overlay(trial,state,failure=false) {
         // Otherwise the runner's outdated tracking-error Return page reappears.
         return;
       }
+      if (isFormalBreak) state.restDurationMs=performance.now()-state.restStartedAtMs;
       state.finished=true;
       removeBimanualOverlay();
     });
   }
   document.body.appendChild(overlay);
+  if (isFormalBreak) {
+    state.restStartedAtMs=performance.now();
+    const button=panel.querySelector('.bim-main-button');
+    const countdown=panel.querySelector('.v20-break-countdown');
+    const updateBreak=()=>{
+      if (!overlay.isConnected) { clearInterval(timerId); return; }
+      const remainingMs=Math.max(0,BIM_DENOVO_BREAK_MIN_SEC*1000-(performance.now()-state.restStartedAtMs));
+      const seconds=Math.ceil(remainingMs/1000);
+      if (remainingMs>0) {
+        if (button) {button.disabled=true;button.textContent=`Continue (${seconds})`;}
+        if (countdown) countdown.textContent=`Continue available in ${seconds} s`;
+      } else {
+        if (button) {button.disabled=false;button.textContent='Continue';}
+        if (countdown) countdown.textContent='Continue when you are ready.';
+        clearInterval(timerId);
+      }
+    };
+    const timerId=setInterval(updateBreak,100);
+    updateBreak();
+  }
 }
 function v20Custom(trial) {return ['v20_dynamic','v20_practice','v20_gate','v20_axis_demo'].includes(trial.kind);}
 function v20Fail(state,reason,addEvent,tMs) {
@@ -8216,7 +8264,7 @@ function v20AxisDemoFrame(args) {
     const violation=axisTrialMonitor(state,`axisDemo:${trial.id}:${state.index}:${state.targetAt}`,
       displacements,tMs);
     if(violation){
-      const record={index:state.index,hand,promptDirection:prompt,
+      const record={index:state.index,hand,promptDirection:prompt,targetDirection:prompt,
         outcome:'off_axis_warning_demonstrated',offAxisViolation:true,
         offAxis:violation,tMs};
       state.attempts.push(record);state.lastResult=record;
@@ -8225,7 +8273,7 @@ function v20AxisDemoFrame(args) {
     }else if(state.clock-state.targetAt>=15000){
       // Keep instructional examples finite; missing a demonstration never
       // counts as a scored rule failure. Preserve the fact it was NOT seen.
-      const record={index:state.index,hand,promptDirection:prompt,
+      const record={index:state.index,hand,promptDirection:prompt,targetDirection:prompt,
         outcome:'demonstration_not_detected',offAxisViolation:false,tMs};
       state.attempts.push(record);state.lastResult=record;
       state.feedbackAt=state.clock;state.phase='feedback';state.index++;
@@ -8722,6 +8770,38 @@ function v20DrawCustom(ctx,args) {
   endParticipantFacingOverlay(ctx);setReadoutIfChanged(state,setReadout,'');
 }
 
+/* Firestore rejects undefined, including nested values in arrays/records.
+ * Normalize runner-bound summaries, derived frames and event payloads rather
+ * than changing the task controller or inventing zero-valued measurements.
+ * This guard also protects other phases if new optional fields are added.
+ */
+const axisFirestoreWarningPaths = new Set();
+function axisFirestoreSafe(value, path='payload', seen=new WeakSet()) {
+  if (value === undefined || (typeof value === 'number' && !Number.isFinite(value))) {
+    if (axisFirestoreWarningPaths.size < 35 && !axisFirestoreWarningPaths.has(path)) {
+      axisFirestoreWarningPaths.add(path);
+      console.warn('[V11 save guard] Null substituted for non-Firestore-safe value at',path);
+    }
+    return null;
+  }
+  if (value === null || typeof value !== 'object') return value;
+  if (seen.has(value)) {
+    console.warn('[V11 save guard] Circular reference at',path);
+    return null;
+  }
+  // Do not rewrite Date, Timestamp, or custom Firebase reference objects.
+  const proto=Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && proto !== null && proto !== Object.prototype &&
+      proto?.constructor?.name !== 'Object') return value;
+  seen.add(value);
+  const result=Array.isArray(value)
+    ? Array.from(value,(item,index)=>axisFirestoreSafe(item,`${path}[${index}]`,seen))
+    : Object.fromEntries(Object.entries(value).map(([key,item])=>
+        [key,axisFirestoreSafe(item,`${path}.${key}`,seen)]));
+  seen.delete(value);
+  return result;
+}
+
 const experiment={
   ...legacyExperiment,
   id:'two-hand-denovo-axis-constrained-v11',
@@ -8786,10 +8866,15 @@ const experiment={
     return legacyExperiment.onTrialStart(trial,context);
   },
   onFrame(args) {
+    // The runner may persist event payloads alongside each trial summary.
+    const originalAddEvent=args.addEvent;
+    const safeArgs=typeof originalAddEvent==='function'
+      ? {...args,addEvent:(name,data)=>originalAddEvent(name,axisFirestoreSafe(data,`event.${name}`))}
+      : args;
     const before=Array.isArray(args.state?.reaches)?args.state.reaches.length:
       Array.isArray(args.state?.attempts)?args.state.attempts.length:0;
-    const derived=args.trial.kind==='v20_axis_demo'?v20AxisDemoFrame(args):
-      v20Custom(args.trial)?v20Frame(args):legacyExperiment.onFrame(args);
+    const derived=args.trial.kind==='v20_axis_demo'?v20AxisDemoFrame(safeArgs):
+      v20Custom(args.trial)?v20Frame(safeArgs):legacyExperiment.onFrame(safeArgs);
     const records=Array.isArray(args.state?.reaches)?args.state.reaches:
       Array.isArray(args.state?.attempts)?args.state.attempts:null;
     if(args.trial.axisConstrained&&records&&records.length>before){
@@ -8799,14 +8884,14 @@ const experiment={
       last.maxLeftOffAxis=m?.Left?.maxOffAxis??null;
       last.maxRightOffAxis=m?.Right?.maxOffAxis??null;
       if(last.offAxisViolation!==true)last.offAxisViolation=false;
-      axisAddEvent(args.addEvent,'axis_attempt_metrics',{
-        kind:args.trial.kind,targetDirection:last.targetDirection,
-        index:last.index??last.targetIndex??args.state.targetIndex,
+      axisAddEvent(safeArgs.addEvent,'axis_attempt_metrics',{
+        kind:args.trial.kind,targetDirection:last.targetDirection??last.promptDirection??null,
+        index:last.index??last.targetIndex??args.state.targetIndex??null,
         offAxisViolation:last.offAxisViolation,
         maxLeftOffAxis:last.maxLeftOffAxis,maxRightOffAxis:last.maxRightOffAxis});
     }
     v22ShowPercent(args.trial,args.state);
-    return derived;
+    return axisFirestoreSafe(derived,`frame.${args.trial.id}`);
   },
   draw(ctx,args) {
     if(args.trial.v20) {v22ShowPercent(args.trial,args.state);v20Overlay(args.trial,args.state);setReadoutIfChanged(args.state,args.setReadout,'');return;}
@@ -8829,7 +8914,7 @@ const experiment={
     if(v20Custom(args.trial)) {
       removeBimanualOverlay();axisShowOffAxisOverlay(false);axisShowGateWrongOverlay(false);setBimanualTrackingOverlay(false);
       const s=args.state,t=args.trial;
-      return {protocolVersion:'axis_constrained_v11',stage:t.kind,hand:t.hand??null,guided:t.guided===true,
+      return axisFirestoreSafe({protocolVersion:'axis_constrained_v11',stage:t.kind,hand:t.hand??null,guided:t.guided===true,
         blockFinishedNormally:s.finished===true&&!s.failureReason,failureReason:s.failureReason||(s.finished?null:'v20_stage_incomplete'),
         gatePassed:s.gatePassed,gateErrorCount:s.errors,perfectRounds:s.perfectRounds,
         gateThresholds:{maxErrors:V20_CONFIG.gateMaxErrors,maxAttempts:V20_CONFIG.gateMaxAttempts,perfectRounds:V20_CONFIG.gatePerfectRounds},
@@ -8859,14 +8944,17 @@ const experiment={
         dynamicMovingFrameCount:s.movingFrames.length,
         gateTrackingGapCount:s.gateTrackingGapCount,gateTrackingGapMs:s.gateTrackingGapMs,
         gateFreeRestartCount:s.gateFreeRestartCount,
-        partialPaymentRequired:!!s.failureReason||!s.finished};
+        partialPaymentRequired:!!s.failureReason||!s.finished},`summary.${t.id}`);
     }
     const base=legacyExperiment.onTrialEnd(args);
     const violations=(args.state.reaches||[]).filter(r=>r.offAxisViolation===true);
-    return {...base,protocolVersion:'axis_constrained_v11',scene:args.trial.scene??'setup',
+    const isFormalBreak=/^v20_break_[1-3]$/.test(args.trial.id||'');
+    return axisFirestoreSafe({...base,protocolVersion:'axis_constrained_v11',scene:args.trial.scene??'setup',
       axisConstrained:args.trial.axisConstrained===true,
       axisViolationCount:violations.length,axisViolations:violations,
-      axisThresholds:AXIS_V1};
+      axisThresholds:AXIS_V1,
+      ...(isFormalBreak ? {minimumRestSec:BIM_DENOVO_BREAK_MIN_SEC,
+        actualRestDurationMs:args.state.restDurationMs??null} : {})},`summary.${args.trial.id}`);
   }
 };
 export default experiment;
