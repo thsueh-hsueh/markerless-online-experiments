@@ -7832,7 +7832,7 @@ function v20Overlay(trial,state,failure=false) {
   const lines=failure?[
     state.failureReason==='rule_check_failed'?'You did not pass the control check.':'We could not complete the movement or tracking check.',
     V20_CONFIG.failureReturnText,
-    V20_CONFIG.partialPaymentArrangementText
+    ...(trial.kind==='v20_dynamic'?[]:[V20_CONFIG.partialPaymentArrangementText])
   ]:trial.lines;
   if(!failure&&trial.demo) {
     const canvas=document.createElement('canvas');canvas.className='v20-demo';
@@ -7909,10 +7909,10 @@ function v20Overlay(trial,state,failure=false) {
 function v20Custom(trial) {return ['v20_dynamic','v20_practice','v20_gate','v20_axis_demo'].includes(trial.kind);}
 function v20Fail(state,reason,addEvent,tMs) {
   if(state.failureReason)return;state.failureReason=reason;state.phase='failure';state.finished=true;
-  addEvent('v20_exit_requested',{reason,tMs,partialPaymentRequired:true,errors:state.errors});
+  addEvent('v20_exit_requested',{reason,tMs,partialPaymentRequired:state.stageKind!=='v20_dynamic',errors:state.errors});
 }
 function v20StartState(trial) {
-  return {finished:false,phase:'home',index:0,step:0,hold:{Left:null,Right:null},holdPct:{Left:0,Right:0},
+  return {stageKind:trial.kind,finished:false,phase:'home',index:0,step:0,hold:{Left:null,Right:null},holdPct:{Left:0,Right:0},
     sequence:trial.sequence?[...trial.sequence]:[],attempts:[],errors:0,roundCorrect:0,perfectRounds:0,gatePassed:false,
     movingFrames:[],dynamicSteps:[],dynamicMoved:{Left:false,Right:false},lastT:null,clock:0,lastValid:false,
     lostAt:null,invalidTrackingAttempts:0,candidate:null,candidateFrames:0,initial:null,origin:null,
@@ -9061,7 +9061,8 @@ const experiment={
   ...legacyExperiment,
   id:'two-hand-denovo-axis-constrained-v12',
   title:'Axis-Constrained Two-Hand De Novo — V12 Four Diagonal Targets',
-  participantFlow:{...legacyExperiment.participantFlow,postTaskSurvey:true},
+  participantFlow:{...legacyExperiment.participantFlow,postTaskSurvey:true,
+    preTaskQuestionsAfterTrialId:'v20_dynamic_four'},
   trials:()=>{
     if(!axisIsPrototypeDev())return v20Trials;
     const mode=new URLSearchParams(location.search).get('axisTest');
@@ -9201,7 +9202,7 @@ const experiment={
         dynamicMovingFrameCount:s.movingFrames.length,
         gateTrackingGapCount:s.gateTrackingGapCount,gateTrackingGapMs:s.gateTrackingGapMs,
         gateFreeRestartCount:s.gateFreeRestartCount,
-        partialPaymentRequired:!!s.failureReason||!s.finished},`summary.${t.id}`);
+        partialPaymentRequired:t.kind==='v20_dynamic'?false:(!!s.failureReason||!s.finished)},`summary.${t.id}`);
     }
     const base=legacyExperiment.onTrialEnd(args);
     const violations=(args.state.reaches||[]).filter(r=>r.offAxisViolation===true);
