@@ -8802,10 +8802,17 @@ function axisFirestoreSafe(value, path='payload', seen=new WeakSet()) {
   return result;
 }
 
-// V12 instrumentation: model-relevant initial velocity is measured 100 ms after
-// detected hand onset. It is not peak velocity; both values are retained.
+// V12 pilot kinematics: the study-defined early velocity is estimated from 0-150 ms
+// after onset using multiple valid frames. The 100 ms sample and peak velocity
+// remain separate, optional comparator measures; none is required to finish a trial.
 const V12_PREPARATION_MS = 3000;
-const V12_INIT_MS = 100;
+const V12_INIT_MS = 100; // Legacy Haith-comparison sample, not the primary V12 measure.
+const V12_EARLY_WINDOW_MS = 150;
+const V12_EARLY_FIRST_SAMPLE_MAX_MS = 55;
+const V12_EARLY_LAST_SAMPLE_MIN_MS = 110;
+const V12_EARLY_MIN_SPAN_MS = 80;
+const V12_EARLY_MIN_SAMPLES = 3;
+const V12_EARLY_MIN_PAIR_GAP_MS = 25;
 const V12_MAX_INTERPOLATION_GAP_MS = 85;
 const V12_VALID_SPEED_MAX_UNITS_PER_SEC = 9;
 const V12_MODEL_UNITS = 'calibrated normalized hand coordinates per second';
@@ -8875,22 +8882,117 @@ function v12PeakSpeed(samples,a,b,onset){
   for(let i=1;i<valid.length-1;i++)filtered.push([valid[i-1],valid[i],valid[i+1]].sort((a,b)=>a-b)[1]);
   return {peak:Math.max(...filtered),quality:'median3_speed',n:valid.length};
 }
+/* Primary V12 early-velocity definition, independent of Haith's 100-ms point.
+ * Each of Lx,Ly,Rx,Ry is a robust Theil-Sen velocity estimate over
+ * samples in [onset, onset + 150 ms]; each candidate slope spans >=25 ms.
+ * Frames must cover the beginning AND later part of this interval. Never
+ * interpolate across dropped frames, extrapolate beyond observed samples,
+ * or substitute 0 for a missing measurement. Failure reasons are stored so
+ * missing-data mechanisms can be checked before scientific modeling.
+ */
+function v12Median(values){
+  if(!values.length)return null;
+  const v=[...values].sort((a,b)=>a-b);
+  const mid=Math.floor(v.length/2);
+  return v.length%2?v[mid]:(v[mid-1]+v[mid])/2;
+}
+function v12EarlyWindowVelocity(samples,onset,endpointTMs){
+  const result={velocity:null,quality:'unavailable',n:0,spanMs:0,
+    firstSampleAfterOnsetMs:null,lastSampleAfterOnsetMs:null,maxSampleGapMs:null,
+    method:'theil_sen_pairwise_slopes_0to150ms'};
+  if(!Number.isFinite(onset)){result.quality='onset_unavailable';return result;}
+  const bound=Number.isFinite(endpointTMs)?Math.min(onset+V12_EARLY_WINDOW_MS,endpointTMs):onset+V12_EARLY_WINDOW_MS;
+  const data=samples.filter(p=>Number.isFinite(p.t)&&p.t>=onset&&p.t<=bound&&
+    ['lx','ly','rx','ry'].every(k=>Number.isFinite(p[k])));
+  result.n=data.length;
+  if(!data.length){result.quality='no_early_samples';return result;}
+  result.firstSampleAfterOnsetMs=data[0].t-onset;
+  result.lastSampleAfterOnsetMs=data[data.length-1].t-onset;
+  result.spanMs=data[data.length-1].t-data[0].t;
+  result.maxSampleGapMs=data.slice(1).reduce((mx,p,i)=>Math.max(mx,p.t-data[i].t),0);
+  if(data.length<V12_EARLY_MIN_SAMPLES){result.quality='insufficient_early_frames';return result;}
+  if(result.firstSampleAfterOnsetMs>V12_EARLY_FIRST_SAMPLE_MAX_MS){result.quality='early_start_not_observed';return result;}
+  if(result.lastSampleAfterOnsetMs<V12_EARLY_LAST_SAMPLE_MIN_MS){result.quality='early_window_end_not_observed';return result;}
+  if(result.spanMs<V12_EARLY_MIN_SPAN_MS){result.quality='insufficient_early_coverage';return result;}
+  if(result.maxSampleGapMs>V12_MAX_INTERPOLATION_GAP_MS){result.quality='tracking_gap_in_early_window';return result;}
+  const keys=['lx','ly','rx','ry'];
+  const slopes=keys.map(()=>[]);
+  for(let i=0;i<data.length;i++)for(let j=i+1;j<data.length;j++){
+    const dt=data[j].t-data[i].t;
+    if(dt<V12_EARLY_MIN_PAIR_GAP_MS)continue;
+    for(let k=0;k<keys.length;k++)slopes[k].push(1000*(data[j][keys[k]]-data[i][keys[k]])/dt);
+  }
+  const estimate=slopes.map(v12Median);
+  if(estimate.some(v=>!Number.isFinite(v))){result.quality='slopes_unavailable';return result;}
+  if(estimate.some(v=>Math.abs(v)>V12_VALID_SPEED_MAX_UNITS_PER_SEC)){
+    result.quality='implausible_speed';return result;
+  }
+  result.velocity=estimate;
+  result.quality=data.length>=4?'valid':'valid_limited_frames';
+  return result;
+}
+
 function v12KinematicsForRecord(state,rec,samples,now){
   const onset=Number.isFinite(state.handMovementOnsetMs)?state.handMovementOnsetMs:null;
-  const result={kinematicsVersion:'v12_100ms_velocity',
-    initialVelocitySamplingMs:V12_INIT_MS,initialVelocityUnits:V12_MODEL_UNITS,
+  const result={
+    kinematicsVersion:'v12_early_window_0to150ms_v2',
+    initialVelocityUnits:V12_MODEL_UNITS,
+    initialVelocityWindowMs:{start:0,end:V12_EARLY_WINDOW_MS},
+    initialVelocityMethod:'theil_sen_pairwise_slopes_0to150ms',
+    initialHandVelocity0to150ms:null, // [Lx,Ly,Rx,Ry], signed coordinate velocities
+    initialCursorVelocity0to150ms:null,
+    initialCursorSpeedUnitsPerSec:null,
+    initialLeftHandSpeedUnitsPerSec:null,
+    initialRightHandSpeedUnitsPerSec:null,
+    initialCursorDirectionErrorDeg:null,
+    initialVelocityAvailable:false,
+    initialVelocityQuality:'unavailable',
+    initialVelocityFrameCount:0,
+    initialVelocityCoverageMs:null,
+    initialVelocityFirstSampleMs:null,
+    initialVelocityLastSampleMs:null,
+    initialVelocityMaxSampleGapMs:null,
+    // Retain the historical single-time-point comparator for Haith-style
+    // sensitivity analyses. It is not a prerequisite for the V12 measure.
+    initialVelocitySamplingMs:V12_INIT_MS,
     modelAction100ms:null,modelAction100msMethod:'centered_finite_difference_75_125ms',
     meanVelocity0to100ms:null,modelActionOrder:['Lx','Ly','Rx','Ry'],
     earlyCursorVelocity100ms:null,earlyCursorDirectionErrorDeg:null,
     peakCursorVelocityUnitsPerSec:null,peakLeftHandVelocityUnitsPerSec:null,
     peakRightHandVelocityUnitsPerSec:null,
-    velocityQuality:'unavailable',velocityFrameSamples:0,
+    velocityQuality:'unavailable',velocityFrameSamples:samples.length,
     velocityOnsetTMs:onset,velocityEndTMs:now,
-    hasFirst100ms:false};
-  if(onset===null||!samples.length||rec.preparationTimeout||rec.offAxisViolation)return result;
-  // Haith (2026) uses hand velocity sampled ~100ms after movement onset.
-  // Estimate velocity AT 100ms with a 75-125ms centered difference (not peak
-  // velocity or mean velocity over the first 100ms). Keep mean as a supplement.
+    hasFirst100ms:false,peakVelocityQuality:'unavailable'
+  };
+  if(onset===null||rec.preparationTimeout){
+    result.initialVelocityQuality=onset===null?'onset_unavailable':'preparation_timeout';
+    return result;
+  }
+  const early=v12EarlyWindowVelocity(samples,onset,now);
+  result.initialVelocityQuality=early.quality;
+  result.initialVelocityFrameCount=early.n;
+  result.initialVelocityCoverageMs=early.spanMs;
+  result.initialVelocityFirstSampleMs=early.firstSampleAfterOnsetMs;
+  result.initialVelocityLastSampleMs=early.lastSampleAfterOnsetMs;
+  result.initialVelocityMaxSampleGapMs=early.maxSampleGapMs;
+  if(early.velocity){
+    const [lx,ly,rx,ry]=early.velocity;
+    // Use the learned de novo mapping (X = -LeftY, Y = RightX) rather
+    // than a possibly re-anchored display cursor on the terminal frame.
+    const cx=-ly, cy=rx;
+    result.initialHandVelocity0to150ms=[lx,ly,rx,ry];
+    result.initialCursorVelocity0to150ms={x:cx,y:cy};
+    result.initialCursorSpeedUnitsPerSec=Math.hypot(cx,cy);
+    result.initialLeftHandSpeedUnitsPerSec=Math.hypot(lx,ly);
+    result.initialRightHandSpeedUnitsPerSec=Math.hypot(rx,ry);
+    if(Math.hypot(cx,cy)>.0001 && rec.targetDirection){
+      result.initialCursorDirectionErrorDeg=wrapAngleDeg(
+        angleDeg(cx,cy)-targetAngleDeg(rec.targetDirection));
+    }
+    result.initialVelocityAvailable=true;
+  }
+  // Secondary 100-ms comparator: do not require it to exist. An unobserved
+  // sample remains null and may be recomputed from the original raw frames.
   const start=v12SampleAt(samples,onset),hundred=v12SampleAt(samples,onset+V12_INIT_MS);
   const before=v12SampleAt(samples,onset+75),after=v12SampleAt(samples,onset+125);
   if(start&&hundred){
@@ -8917,7 +9019,6 @@ function v12KinematicsForRecord(state,rec,samples,now){
   result.peakLeftHandVelocityUnitsPerSec=left.peak;
   result.peakRightHandVelocityUnitsPerSec=right.peak;
   result.velocityQuality=result.hasFirst100ms?'first100ms_observed':'first100ms_not_observed';
-  result.velocityFrameSamples=samples.length;
   result.peakVelocityQuality=cursor.quality;
   return result;
 }
@@ -8927,7 +9028,7 @@ function v12CaptureModelData(args,derived,initialRecordCount){
   let traces=state.v12KinematicTraces;
   if(!traces){traces=new Map();state.v12KinematicTraces=traces;}
   const idx=state.targetIndex;
-  const useful=['lx','ly','rx','ry','cx','cy'];
+  const useful=['lx','ly','rx','ry']; // Initial estimate must not depend on display-cursor availability.
   const sample={t:tMs,lx:derived?.leftHandX,ly:derived?.leftHandY,
     rx:derived?.rightHandX,ry:derived?.rightHandY,cx:derived?.taskX,cy:derived?.taskY};
   if(useful.every(k=>Number.isFinite(sample[k]))&&Number.isFinite(state.targetOnsetMs)&&
@@ -8960,7 +9061,7 @@ const experiment={
   ...legacyExperiment,
   id:'two-hand-denovo-axis-constrained-v12',
   title:'Axis-Constrained Two-Hand De Novo — V12 Four Diagonal Targets',
-  participantFlow:{...legacyExperiment.participantFlow,postTaskSurvey:false},
+  participantFlow:{...legacyExperiment.participantFlow,postTaskSurvey:true},
   trials:()=>{
     if(!axisIsPrototypeDev())return v20Trials;
     const mode=new URLSearchParams(location.search).get('axisTest');
@@ -9108,7 +9209,10 @@ const experiment={
     return axisFirestoreSafe({...base,protocolVersion:'axis_constrained_v12',scene:args.trial.scene??'setup',
       formalProtocol:args.trial.modelDataCapture===true?'four_diagonal_160':null,
       preparationTimeLimitMs:args.trial.modelDataCapture===true?V12_PREPARATION_MS:null,
-      modelActionDefinition:args.trial.modelDataCapture===true?'initial 100ms [Lx,Ly,Rx,Ry] calibrated-normalized movement velocity':null,
+      modelActionDefinition:args.trial.modelDataCapture===true?'primary: 0-150ms robust signed [Lx,Ly,Rx,Ry] velocity; secondary: 100ms point estimate':null,
+      earlyVelocityMetricVersion:args.trial.modelDataCapture===true?'v12_early_window_0to150ms_v2':null,
+      initialVelocity0to150msAvailableCount:args.trial.modelDataCapture===true
+        ?(args.state.reaches||[]).filter(r=>r.initialVelocityAvailable===true).length:null,
       preparationTimeoutCount:args.trial.modelDataCapture===true
         ?(args.state.reaches||[]).filter(r=>r.preparationTimeout===true).length:null,
       initialVelocity100msAvailableCount:args.trial.modelDataCapture===true
