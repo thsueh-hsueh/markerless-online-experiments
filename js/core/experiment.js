@@ -503,16 +503,22 @@ async function run(exp) {
     ui.downloadJson(`${sessionId}.json`, sessionDoc);
   }
 
-  /* ---- 7. Required post-task survey. Core game data are already safe. */
+  /* ---- 7. Required post-task survey. Core game data are already safe.
+   * Individual experiments can exclude named SECTIONS. Existing studies
+   * without this opt-in field retain the original complete survey. */
+  const omittedSurveySections = exp.participantFlow?.postTaskSurveyOmitSections;
+  const studyPostTaskQuestions = Array.isArray(omittedSurveySections) && omittedSurveySections.length
+    ? POST_TASK_QUESTIONS.filter(q => !omittedSurveySections.includes(q.section))
+    : POST_TASK_QUESTIONS;
   let postTaskSurvey = null;
   let postTaskSurveySavePromise = null;
-  if (exp.participantFlow?.postTaskSurvey && (!devMode || showPostInDev) && POST_TASK_QUESTIONS?.length) {
+  if (exp.participantFlow?.postTaskSurvey && (!devMode || showPostInDev) && studyPostTaskQuestions?.length) {
     configureQuestionScreen({
       title: "Please answer the questions below to see your Treasure Hunt score.",
       subtitle: "",
       buttonText: "See My Score",
     });
-    postTaskSurvey = await collectParticipantSurvey(POST_TASK_QUESTIONS, POST_TASK_LIKERT_SCALE);
+    postTaskSurvey = await collectParticipantSurvey(studyPostTaskQuestions, POST_TASK_LIKERT_SCALE);
 
     if (saving) {
       // Save required post-task responses immediately. Do not swallow failures:
