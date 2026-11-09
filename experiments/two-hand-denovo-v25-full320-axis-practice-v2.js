@@ -25,7 +25,7 @@ if (typeof window !== "undefined") {
  * quiz and final explicit-rule probe are not scheduled.
  * Runner must support state.finished and qualityControl.evaluateTrial.
  * V21: display/teaching redesign + endpoint-based control check.
- * Configure V20_CONFIG below before recruitment (partial-payment text and URL).
+ * Verify the study-specific Prolific return URL before recruitment.
  */
 
 const TARGET_ECCENTRICITY = 0.70;
@@ -7613,10 +7613,8 @@ const AXIS_DYNAMIC_ROUTE=Object.freeze([
   {Left:'right',Right:'right'}, {Left:'home',Right:'home'},
 ]);
 const V20_CONFIG = Object.freeze({
-  partialPaymentText: 'You will receive partial payment for the time you spent in this study.',
   prolificReturnUrl: 'https://app.prolific.com/', // May be replaced with the study-specific exit URL.
   failureReturnText: 'Please return to your Prolific study page and return your submission.',
-  partialPaymentArrangementText: 'Your partial payment will be arranged separately.',
   gateMaxErrors: 4,
   gateMaxAttempts: 24,
   gatePerfectRounds: 2,
@@ -9453,8 +9451,7 @@ function v20Overlay(trial,state,failure=false) {
   if(title.textContent)panel.appendChild(title);
   const lines=failure?[
     state.failureReason==='rule_check_failed'?'You did not pass the control check.':'We could not complete the movement or tracking check.',
-    V20_CONFIG.failureReturnText,
-    V20_CONFIG.partialPaymentArrangementText
+    V20_CONFIG.failureReturnText
   ]:trial.lines;
   if(!failure&&trial.demo) {
     const canvas=document.createElement('canvas');canvas.className='v20-demo';
@@ -11248,8 +11245,8 @@ const experiment={
           failureReason:summary?.failureReason||'v20_stage_incomplete',reasons:[summary?.failureReason||'v20_stage_incomplete']};
       } else decision=legacyExperiment.qualityControl.evaluateTrial(context);
       if(decision.action==='terminate'&&typeof document!=='undefined') {
-        // Keep compensation instructions available even when the runner swaps
-        // its own termination panel in after evaluateTrial returns.
+        // Keep termination guidance visible even when the runner swaps
+        // its own termination panel after evaluateTrial returns.
         setTimeout(()=>v20Overlay(trial,{failureReason:decision.failureReason,finished:false},true),0);
       }
       return decision;
