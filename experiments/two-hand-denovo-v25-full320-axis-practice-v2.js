@@ -8631,12 +8631,16 @@ function v17BaselineDemo(ctx,W,H,hand,t){
     f<.70?1:f<.96?1-demoEase01((f-.70)/.26):0;
   const b={x:W*.105,y:H*.135,w:W*.79,h:H*.69};
   v13Panel(ctx,b.x,b.y,b.w,b.h);
-  const caption=`MOVE YOUR ${hand.toUpperCase()} HAND TOWARD THE GEM`;
+  const captionLines=[
+    `MOVE YOUR ${hand.toUpperCase()} HAND TOWARD THE GEM`,
+    'IN ONE SMOOTH MOVEMENT.',
+  ];
   const fontSize=Math.min(35,scale*.050);
   ctx.save();ctx.font=`750 ${Math.round(fontSize)}px system-ui,sans-serif`;
-  const labelWidth=ctx.measureText(caption).width;ctx.restore();
+  const labelWidth=Math.max(...captionLines.map(line=>ctx.measureText(line).width));ctx.restore();
   const fitted=Math.max(18,Math.min(fontSize,fontSize*(b.w*.91)/Math.max(1,labelWidth)));
-  v13DemoText(ctx,caption,W*.5,H*.224,fitted,color);
+  v13DemoText(ctx,captionLines[0],W*.5,H*.194,fitted,color);
+  v13DemoText(ctx,captionLines[1],W*.5,H*.245,fitted,color);
   const cx=W*.5,cy=H*.56;
   const reach=Math.min(H*.18,W*.19,150);
   const ex=cx+vx*reach,ey=cy+vy*reach;
